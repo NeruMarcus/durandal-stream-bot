@@ -45,7 +45,7 @@ stream-bot/
 ### 1. Клонировать и создать окружение
 
 ```powershell
-git clone https://github.com/nerumarcus/durandal-stream-bot
+git clone https://github.com/NeruMarcus/durandal-stream-bot
 cd durandal-stream-bot
 python -m venv venv
 venv\Scripts\pip install -r requirements.txt
