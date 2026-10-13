@@ -43,7 +43,7 @@ VOICE_ONNX = os.path.join(_VOICES_DIR, VOICE_NAME + ".onnx")
 LENGTH_SCALE = "1.4"
 # Финальное растяжение через ffmpeg (тон сохраняется, WSOLA).
 # 1.0 = без растяжения, только Piper LENGTH_SCALE.
-ATEMPO = "1.0"
+ATEMPO = "0.9"
 
 
 def _download(url: str, dest: str):
