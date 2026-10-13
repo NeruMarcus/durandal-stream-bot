@@ -13,7 +13,8 @@ from twitch.chat import DurandalBot
 from logger import logger
 
 AUTH_URL = (
-    "http://localhost:4343/oauth?scopes=user:read:chat&force_verify=true"
+    "http://localhost:4343/oauth"
+    "?scopes=user:read:chat+user:bot+channel:bot&force_verify=true"
 )
 
 

@@ -75,7 +75,7 @@ ollama create durandal-gemma -f Modelfile
 Copy-Item .env.example .env
 ```
 
-Заполните Twitch-блок (ID — на https://twitchtokengenerator.com, приложение — https://dev.twitch.tv/console, скоп токена `user:read:chat`):
+Заполните Twitch-блок (ID — на https://twitchtokengenerator.com, приложение — https://dev.twitch.tv/console, скопы токена `user:read:chat user:bot channel:bot`):
 
 | Ключ | Назначение |
 |------|-----------|
@@ -186,6 +186,7 @@ Invoke-RestMethod 'https://id.twitch.tv/oauth2/validate' -Headers @{Authorizatio
 ```
 В `scopes` обязан быть `user:read:chat`, `client_id` — совпадать с `TWITCH_CLIENT_ID` в `.env`, `user_id` — с `TWITCH_BOT_ID`.
 3. Не сходится — `run.bat auth` заново (войти под аккаунтом бота, разрешить доступ) и перезапуск.
+4. Отдельный случай: `403 subscription missing proper authorization` при живых скопах. Подписка едет через conduit на **app-токене**, а для `channel.chat.message` Twitch тогда требует ещё `user:bot` (от бота) + `channel:bot` (от вещателя). Наш OAuth-URL уже просит все три скопа — просто пройдите `run.bat auth` заново (старые токены их не содержат) и перезапустите бота.
 
 </details>
 

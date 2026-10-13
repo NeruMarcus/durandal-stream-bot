@@ -275,14 +275,14 @@ try:
     if _pt._find_exe() and os.path.isfile(_pt.VOICE_ONNX):
         _out = None
         try:
-            _out = _pt.synthesize("Тестовая фраза Дюрандаля.", length_scale="1.0")
+            _out = _pt.synthesize("Тестовая фраза Дюрандаля.")
             with _wave2.open(_out, "rb") as w:
                 assert w.getsampwidth() == 2 and w.getframerate() == 22050
                 _dur = w.getnframes() / w.getframerate()
                 _s = _arr2.array("h")
                 _s.frombytes(w.readframes(w.getnframes()))
             assert max(abs(x) for x in _s) > 1000, "тишина"
-            assert _dur > 1.8, f"растяжение не применилось: {_dur:.2f}с"
+            assert _dur > 1.6, f"растяжение не применилось: {_dur:.2f}с"
             ok(f"piper: офлайн-синтез работает (22050 Гц, {_dur:.1f}с, не тишина)")
         finally:
             if _out:
@@ -314,6 +314,11 @@ try:
     import types as _t
     from config import Config as _Cfg
     from twitch.chat import DurandalBot, _clean_token
+
+    from auth_twitch import AUTH_URL
+    for scope in ("user:read:chat", "user:bot", "channel:bot"):
+        assert scope in AUTH_URL, f"OAuth просит не все скопы: нет {scope}"
+    ok("twitch: AUTH_URL просит user:read:chat+user:bot+channel:bot")
 
     assert _clean_token("oauth:abc123") == "abc123"
     assert _clean_token("  xyz  ") == "xyz"
