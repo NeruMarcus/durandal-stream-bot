@@ -24,6 +24,8 @@ models/rvc_webui/assets/pretrained/
 models/rvc_webui/assets/pretrained_v2/
 models/rvc_webui/assets/rmvpe/rmvpe.pt
 models/rvc_webui/assets/uvr5_weights/
+# Upstream служебные .gitignore внутри assets/ — мусор, в репо не тащим.
+models/rvc_webui/assets/*/.gitignore
 
 # OS
 Thumbs.db
