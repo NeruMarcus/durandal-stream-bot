@@ -80,7 +80,17 @@ def _atomic_write(data: str):
     with _state_lock:
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(data)
-        os.replace(tmp, _OVERLAY_STATE)
+        # Windows: читатель (overlay_server поллит каждые 120 мс) может держать
+        # файл открытым без FILE_SHARE_DELETE — тогда os.replace даёт WinError 5.
+        # Ретраим замену, а не падаем: окно гонки — доли миллисекунды.
+        for attempt in range(8):
+            try:
+                os.replace(tmp, _OVERLAY_STATE)
+                return
+            except PermissionError:
+                if attempt == 7:
+                    raise
+                time.sleep(0.01 * (attempt + 1))
 
 
 def _state_json(speaking: bool, energy: float, status: str | None = None) -> str:
@@ -191,7 +201,11 @@ def _play_local(path: str):
                     if stop.is_set():
                         return
                     # Статус жёстко пустой: идёт голос — оверлей покажет TRANSMITTING.
-                    _atomic_write(_state_json(True, level, ""))
+                    # Кадр не критичен: лок читателя — пропускаем, эквалайзер не заметит.
+                    try:
+                        _atomic_write(_state_json(True, level, ""))
+                    except OSError:
+                        pass
 
             threading.Thread(target=pump, daemon=True, name="eq").start()
 
