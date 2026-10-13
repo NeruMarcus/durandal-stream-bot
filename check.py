@@ -278,10 +278,12 @@ try:
             _out = _pt.synthesize("Тестовая фраза Дюрандаля.", length_scale="1.0")
             with _wave2.open(_out, "rb") as w:
                 assert w.getsampwidth() == 2 and w.getframerate() == 22050
+                _dur = w.getnframes() / w.getframerate()
                 _s = _arr2.array("h")
                 _s.frombytes(w.readframes(w.getnframes()))
             assert max(abs(x) for x in _s) > 1000, "тишина"
-            ok("piper: офлайн-синтез работает (22050 Гц, не тишина)")
+            assert _dur > 1.8, f"растяжение не применилось: {_dur:.2f}с"
+            ok(f"piper: офлайн-синтез работает (22050 Гц, {_dur:.1f}с, не тишина)")
         finally:
             if _out:
                 try:

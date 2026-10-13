@@ -33,9 +33,11 @@ VOICE_URLS = (
 )
 VOICE_ONNX = os.path.join(_VOICES_DIR, VOICE_NAME + ".onnx")
 
-# Заметно медленнее единицы — размеренная речь вместо скороговорки
-# (≈−29%, в духе edge-Dmitry на −25%).
+# Заметно медленнее единицы — размеренная речь вместо скороговорки.
 LENGTH_SCALE = "1.4"
+# Финальное растяжение через ffmpeg (тон сохраняется, WSOLA).
+# Суммарно с LENGTH_SCALE: ~2x медленнее базы ≈ темп edge-Dmitry на −25%.
+ATEMPO = "0.7"
 
 
 def _download(url: str, dest: str):
@@ -93,6 +95,24 @@ def ensure_piper() -> tuple[str, str]:
     return exe, voice
 
 
+def _apply_atempo(in_path: str, out_path: str) -> str:
+    """Растяжение без изменения тона. import ленивый — модуль обязан
+    импортироваться и в голой песочнице без сторонних зависимостей."""
+    import imageio_ffmpeg
+
+    r = subprocess.run(
+        [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-i", in_path,
+         "-af", f"atempo={ATEMPO}", out_path],
+        capture_output=True, timeout=120,
+    )
+    if r.returncode != 0 or not (
+        os.path.exists(out_path) and os.path.getsize(out_path) > 1000
+    ):
+        err = r.stderr.decode("utf-8", errors="replace")[-200:]
+        raise RuntimeError(f"Piper atempo: {err}")
+    return out_path
+
+
 def synthesize(text: str, out_path: str | None = None,
                length_scale: str = LENGTH_SCALE) -> str:
     """Офлайн-синтез в wav (22050 Гц, моно). Текст — уже чистый, без [тегов]."""
@@ -101,19 +121,26 @@ def synthesize(text: str, out_path: str | None = None,
         tag = hashlib.md5(text.encode()).hexdigest()[:8]
         out_path = os.path.join(_SELF_DIR, "temp", f"piper_{tag}.wav")
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    cmd = [exe, "--model", voice, "--output_file", out_path,
+    raw_path = out_path + ".raw.wav"
+    cmd = [exe, "--model", voice, "--output_file", raw_path,
            "--length_scale", length_scale]
     try:
         r = subprocess.run(cmd, input=text.encode("utf-8"),
                            capture_output=True, timeout=180)
     except subprocess.TimeoutExpired as e:
         raise RuntimeError(f"Piper: таймаут синтеза ({e})")
-    if r.returncode != 0 or not (
-        os.path.exists(out_path) and os.path.getsize(out_path) > 1000
-    ):
-        err = r.stderr.decode("utf-8", errors="replace")[-300:]
-        raise RuntimeError(f"Piper: {err}")
-    return out_path
+    try:
+        if r.returncode != 0 or not (
+            os.path.exists(raw_path) and os.path.getsize(raw_path) > 1000
+        ):
+            err = r.stderr.decode("utf-8", errors="replace")[-300:]
+            raise RuntimeError(f"Piper: {err}")
+        return _apply_atempo(raw_path, out_path)
+    finally:
+        try:
+            os.remove(raw_path)
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":
