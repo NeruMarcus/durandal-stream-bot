@@ -36,8 +36,8 @@ VOICE_ONNX = os.path.join(_VOICES_DIR, VOICE_NAME + ".onnx")
 # Заметно медленнее единицы — размеренная речь вместо скороговорки.
 LENGTH_SCALE = "1.4"
 # Финальное растяжение через ffmpeg (тон сохраняется, WSOLA).
-# Суммарно с LENGTH_SCALE: ~2x медленнее базы ≈ темп edge-Dmitry на −25%.
-ATEMPO = "0.7"
+# Суммарно с LENGTH_SCALE: медленная, весомая речь.
+ATEMPO = "0.8"
 
 
 def _download(url: str, dest: str):

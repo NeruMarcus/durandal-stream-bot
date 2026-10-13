@@ -47,6 +47,11 @@ def _prune_temp(max_age_sec: float | None = None):
             try:
                 if not os.path.isfile(path):
                     continue
+                # Пустышки от несостоявшихся записей (оборванный edge-tts и т.п.) —
+                # в утиль сразу, вне зависимости от возраста.
+                if os.path.getsize(path) == 0:
+                    os.remove(path)
+                    continue
                 if max_age_sec is not None and now - os.path.getmtime(path) < max_age_sec:
                     continue
                 os.remove(path)
