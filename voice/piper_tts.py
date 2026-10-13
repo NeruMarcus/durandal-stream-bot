@@ -42,8 +42,8 @@ VOICE_ONNX = os.path.join(_VOICES_DIR, VOICE_NAME + ".onnx")
 # Заметно медленнее единицы — размеренная речь вместо скороговорки.
 LENGTH_SCALE = "1.4"
 # Финальное растяжение через ffmpeg (тон сохраняется, WSOLA).
-# Суммарно с LENGTH_SCALE: медленная, весомая речь.
-ATEMPO = "0.85"
+# 1.0 = без растяжения, только Piper LENGTH_SCALE.
+ATEMPO = "1.0"
 
 
 def _download(url: str, dest: str):
@@ -141,6 +141,9 @@ def synthesize(text: str, out_path: str | None = None,
         ):
             err = r.stderr.decode("utf-8", errors="replace")[-300:]
             raise RuntimeError(f"Piper: {err}")
+        if ATEMPO == "1.0":
+            os.replace(raw_path, out_path)
+            return out_path
         return _apply_atempo(raw_path, out_path)
     finally:
         try:
