@@ -26,10 +26,16 @@ BIN_URL = (
     "https://github.com/rhasspy/piper/releases/download/"
     f"{PIPER_TAG}/piper_windows_amd64.zip"
 )
-VOICE_NAME = "ru_RU-dmitri-medium"
+# Диктор выбирается без правок кода: PIPER_VOICE=ruslan в .env
+# (load_dotenv в config подхватывает его до первого синтеза).
+KNOWN_VOICES = ("ruslan", "dmitri", "denis", "irina")
+_VOICE_SPEAKER = os.getenv("PIPER_VOICE", "ruslan").strip().lower()
+if _VOICE_SPEAKER not in KNOWN_VOICES:
+    _VOICE_SPEAKER = "ruslan"
+VOICE_NAME = f"ru_RU-{_VOICE_SPEAKER}-medium"
 VOICE_URLS = (
-    f"https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/dmitri/medium/{VOICE_NAME}.onnx",
-    f"https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/dmitri/medium/{VOICE_NAME}.onnx.json",
+    f"https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/{_VOICE_SPEAKER}/medium/{VOICE_NAME}.onnx",
+    f"https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/{_VOICE_SPEAKER}/medium/{VOICE_NAME}.onnx.json",
 )
 VOICE_ONNX = os.path.join(_VOICES_DIR, VOICE_NAME + ".onnx")
 
@@ -37,7 +43,7 @@ VOICE_ONNX = os.path.join(_VOICES_DIR, VOICE_NAME + ".onnx")
 LENGTH_SCALE = "1.4"
 # Финальное растяжение через ffmpeg (тон сохраняется, WSOLA).
 # Суммарно с LENGTH_SCALE: медленная, весомая речь.
-ATEMPO = "0.8"
+ATEMPO = "0.85"
 
 
 def _download(url: str, dest: str):
