@@ -115,6 +115,7 @@ run.bat          # бот
 run.bat auth     # одноразовая авторизация Twitch (браузер откроется сам)
 run.bat check    # песочница: 60+ проверок без сети и токенов
 run.bat overlay  # только оверлей-сервер (предпросмотр дизайна)
+run.bat piper    # докачка и проверка офлайн-голоса Piper
 ```
 
 ### 6. OBS
@@ -132,7 +133,7 @@ durandal-stream-bot/
 ├── docs/screenshots/# кадры оверлея для README
 ├── models/rvc_webui/# RVC-движок (код; бинарники качаются отдельно — см. §RVC голос)
 ├── twitch/chat.py   # EventSub-бот: кулдаун, фильтры, фоновые ответы
-├── voice/           # tts.py (edge-tts → 24k → RVC → EQ), audiofx.py (речь + эмбиент)
+├── voice/           # tts.py (edge-tts → 24k → RVC → EQ), piper_tts.py (офлайн-фолбэк), audiofx.py (речь + эмбиент)
 ├── temp/            # рантайм: overlay_state.json, TTS-фрагменты (не коммитится)
 ├── main.py          # точка входа: vision + twitch циклы, warmup, статусы оверлея
 ├── overlay_server.py# HTTP-сервер + HTML терминала (печать, STATUS, эквалайзер)
@@ -193,7 +194,7 @@ Invoke-RestMethod 'https://id.twitch.tv/oauth2/validate' -Headers @{Authorizatio
 
 Библиотека свежая, 4 ретрая не помогают — это сетевой блок со стороны Microsoft, а не баг бота (без VPN — 403 на handshake, через VPN — работает). Бот при этом не падает: текст всё равно уходит в оверлей, цикл продолжается.
 - Быстрое лечение: поднять VPN и гнать через него хотя бы TTS. edge-tts уважает `HTTPS_PROXY`, так что можно точечно: `$env:HTTPS_PROXY='http://127.0.0.1:1080'` перед `run.bat` (если VPN-клиент даёт локальный прокси) — остальное (Twitch, Ollama) пойдёт напрямую.
-- Радикальное: офлайн-фолбэк Piper TTS (план) — тембр всё равно переозвучивает RVC, так что базовый голос можно синтезировать локально вообще без сети.
+- Встроенное: **офлайн-фолбэк Piper**. После 4 неудачных попыток edge-tts бот сам синтезирует реплику локальным Piper (`ru-RU dmitri/medium`, MIT) и гонит её по тому же пайплайну (24k → RVC → EQ → эмбиент). Тембр всё равно переозвучивает RVC. Движок и голос (~85 МБ) докачиваются сами при первом использовании в `vendor/piper/` (в git не входит); прогрев вручную: `run.bat piper`. Скорость речи — `LENGTH_SCALE` в `voice/piper_tts.py`.
 
 </details>
 
