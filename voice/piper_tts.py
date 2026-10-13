@@ -101,14 +101,14 @@ def ensure_piper() -> tuple[str, str]:
     return exe, voice
 
 
-def _apply_atempo(in_path: str, out_path: str) -> str:
+def _apply_atempo(in_path: str, out_path: str, factor: str = ATEMPO) -> str:
     """Растяжение без изменения тона. import ленивый — модуль обязан
     импортироваться и в голой песочнице без сторонних зависимостей."""
     import imageio_ffmpeg
 
     r = subprocess.run(
         [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-i", in_path,
-         "-af", f"atempo={ATEMPO}", out_path],
+         "-af", f"atempo={factor}", out_path],
         capture_output=True, timeout=120,
     )
     if r.returncode != 0 or not (
@@ -120,11 +120,14 @@ def _apply_atempo(in_path: str, out_path: str) -> str:
 
 
 def synthesize(text: str, out_path: str | None = None,
-               length_scale: str = LENGTH_SCALE) -> str:
-    """Офлайн-синтез в wav (22050 Гц, моно). Текст — уже чистый, без [тегов]."""
+               length_scale: str = LENGTH_SCALE,
+               atempo: str | None = None) -> str:
+    """Офлайн-синтез в wav (22050 Гц, моно). Текст — уже чистый, без [тегов].
+    atempo=None — модульный ATEMPO; atempo="1.0" — без растяжения."""
     exe, voice = ensure_piper()
+    stretch = ATEMPO if atempo is None else atempo
     if out_path is None:
-        tag = hashlib.md5(text.encode()).hexdigest()[:8]
+        tag = hashlib.md5((text + stretch).encode()).hexdigest()[:8]
         out_path = os.path.join(_SELF_DIR, "temp", f"piper_{tag}.wav")
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
     raw_path = out_path + ".raw.wav"
@@ -141,10 +144,10 @@ def synthesize(text: str, out_path: str | None = None,
         ):
             err = r.stderr.decode("utf-8", errors="replace")[-300:]
             raise RuntimeError(f"Piper: {err}")
-        if ATEMPO == "1.0":
+        if stretch == "1.0":
             os.replace(raw_path, out_path)
             return out_path
-        return _apply_atempo(raw_path, out_path)
+        return _apply_atempo(raw_path, out_path, stretch)
     finally:
         try:
             os.remove(raw_path)
