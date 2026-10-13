@@ -1,0 +1,20 @@
+# RVC inference engine (rvc_env, Python 3.10 + CUDA).
+# Установка:
+#   py -3.10 -m venv rvc_env
+#   rvc_env\Scripts\pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
+#   rvc_env\Scripts\python -m pip install "pip==24.0"   (старый резолвер для omegaconf<2.1)
+#   rvc_env\Scripts\pip install -r rvc_requirements.txt
+#   rvc_env\Scripts\pip install https://huggingface.co/Jmica/rvc/resolve/main/fairseq-0.12.2-cp310-cp310-win_amd64.whl
+#
+# torch/torchaudio ставятся отдельно (CUDA-сборка), fairseq — готовым колесом
+# (сборка из исходников требует MSVC). Остальное — здесь.
+
+numpy
+scipy
+soundfile
+librosa
+faiss-cpu
+praat-parselmouth
+pyworld
+torchcrepe
+python-dotenv

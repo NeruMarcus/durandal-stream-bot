@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+venv/
+rvc_env/
+
+# Runtime
+temp/*
+!temp/.gitkeep
+bot.log*
+.tio.tokens.json
+
+# RVC weights & indices — крупные бинарники, не для git (LFS/внешний диск)
+models/**/*.pth
+models/**/*.index
+# RVC engine binaries (~530 МБ, качаются отдельно, см. README §RVC голос):
+# hubert_base.pt, f0G40k/f0D40k, rmvpe.pt, uvr5-веса, *.gitignore внутри — от апстрима.
+models/rvc_webui/assets/hubert/
+models/rvc_webui/assets/pretrained/
+models/rvc_webui/assets/pretrained_v2/
+models/rvc_webui/assets/rmvpe/
+models/rvc_webui/assets/uvr5_weights/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Git
+.git/

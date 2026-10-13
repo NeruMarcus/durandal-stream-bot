@@ -1,0 +1,2 @@
+# Runtime-каталог. Создаётся автоматически при старте (config.TEMP_DIR).
+# Хранит скриншоты, TTS-фрагменты, overlay_state.json. Не коммитится (см. .gitignore).

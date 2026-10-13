@@ -1,0 +1,453 @@
+import array
+import asyncio
+import json
+import math
+import os
+import subprocess
+import tempfile
+import threading
+import time
+import wave
+import shutil
+from concurrent.futures import ThreadPoolExecutor
+
+import imageio_ffmpeg
+
+from config import Config
+from personality import (
+    generate_vision_commentary,
+    generate_fallback,
+    _CHAT_SYSTEM,
+)
+from core.brain import Brain
+from logger import logger
+
+
+_FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
+_OVERLAY_STATE = Config.OVERLAY_STATE
+_TEMP_DIR = Config.TEMP_DIR
+
+os.makedirs(_TEMP_DIR, exist_ok=True)
+
+
+def _prune_temp(max_age_sec: float | None = None):
+    """Чистим накопленные TTS/скриншот-файлы в temp/.
+
+    Без max_age_sec (на старте) удаляем всё, кроме состояния оверлея. С max_age_sec
+    удаляем только файлы старше указанного возраста — для чистки во время работы,
+    не задевая свежие промежуточные файлы.
+    """
+    keep = {"overlay_state.json", ".gitkeep"}
+    now = time.time()
+    try:
+        for name in os.listdir(_TEMP_DIR):
+            if name in keep:
+                continue
+            path = os.path.join(_TEMP_DIR, name)
+            try:
+                if not os.path.isfile(path):
+                    continue
+                if max_age_sec is not None and now - os.path.getmtime(path) < max_age_sec:
+                    continue
+                os.remove(path)
+            except OSError:
+                pass
+    except OSError as e:
+        logger.warning(f"temp очистка: {e}")
+
+
+_prune_temp()
+
+_tts_lock = asyncio.Lock()
+_brain = Brain()
+# Один поток: если LLM зависнет, следующий цикл встанет в очередь,
+# а не насует параллельных зависших вызовов.
+_VISION_EXEC = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vision")
+
+
+# ── Overlay ─────────────────────────────────────────────────────────────────
+
+
+_current_overlay = {"text": "", "emotion": "neutral", "status": ""}
+_state_lock = threading.Lock()
+_speaking = False
+
+
+def _atomic_write(data: str):
+    # Атомарно: OBS-поллер не должен поймать полузаписанный JSON.
+    # Лок — поток эквалайзера и event-loop пишут один и тот же .tmp.
+    tmp = _OVERLAY_STATE + ".tmp"
+    with _state_lock:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(data)
+        os.replace(tmp, _OVERLAY_STATE)
+
+
+def _state_json(speaking: bool, energy: float, status: str | None = None) -> str:
+    return json.dumps(
+        {
+            "text": _current_overlay["text"],
+            "emotion": _current_overlay["emotion"],
+            "speaking": speaking,
+            "energy": round(energy, 3),
+            # Пустой status — оверлей выводит свой (TRANSMITTING/RENDERING/...).
+            "status": _current_overlay["status"] if status is None else status,
+            "timestamp": time.time(),
+        },
+        ensure_ascii=False,
+    )
+
+
+def _save_overlay(text: str, emotion: str = "neutral", speaking: bool = False):
+    _current_overlay["text"] = text
+    _current_overlay["emotion"] = emotion
+    _current_overlay["status"] = ""
+    _atomic_write(_state_json(speaking, 0.0))
+
+
+def _set_speaking(on: bool):
+    global _speaking
+    _speaking = on
+    _current_overlay["status"] = ""
+    _atomic_write(_state_json(on, 0.0))
+
+
+def _set_status(status: str):
+    """Стадия пайплайна в шапку оверлея (ANALYZING/THINKING/SYNTHESIZING)."""
+    _current_overlay["status"] = status
+    _atomic_write(_state_json(_speaking, 0.0))
+
+
+# ── Audio pipeline ──────────────────────────────────────────────────────────
+
+
+def _rms_envelope(path: str, fps: int = 15) -> list[float]:
+    """Нормированная (0..1) громкость по кадрам — для эквалайзера оверлея."""
+    try:
+        with wave.open(path, "rb") as w:
+            if w.getsampwidth() != 2:
+                return []
+            frames = w.readframes(w.getnframes())
+            rate, channels = w.getframerate(), w.getnchannels()
+        samples = array.array("h")
+        samples.frombytes(frames)
+        if channels > 1:
+            samples = samples[::channels]
+        step = max(1, rate // fps)
+        rms = []
+        for i in range(0, len(samples), step):
+            chunk = samples[i:i + step]
+            if not chunk:
+                break
+            rms.append(math.sqrt(sum(x * x for x in chunk) / len(chunk)))
+        peak = max(rms, default=0.0)
+        if peak <= 0:
+            return []
+        # sqrt «вытягивает» тихие слоги, чтобы полоски живо реагировали.
+        return [round((v / peak) ** 0.5, 3) for v in rms]
+    except Exception:
+        return []
+
+
+def _is_direct_wav(path: str) -> bool:
+    """Финальный wav пайплайна уже s16 — крутить через ffmpeg незачем (~1с экономии)."""
+    try:
+        with wave.open(path, "rb") as w:
+            return w.getsampwidth() == 2
+    except Exception:
+        return False
+
+
+def _play_local(path: str):
+    """ Синхронное проигрывание: winsound требует живой файл весь трек. """
+    wav, owned = path, False
+    if not _is_direct_wav(path):
+        # mp3 от edge-tts и прочие форматы — гоним через ffmpeg в s16 wav.
+        fd, wav = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        owned = True
+        r = subprocess.run(
+            [_FFMPEG, "-y", "-i", path, "-sample_fmt", "s16", "-f", "wav", wav],
+            capture_output=True,
+            check=False,
+        )
+        if r.returncode != 0:
+            shutil.copy2(path, wav)
+    stop = threading.Event()
+    try:
+        # Пока играет — шлём громкость в оверлей, чтобы эквалайзер реагировал на голос.
+        envelope = _rms_envelope(wav)
+        if envelope:
+            fps = 15
+
+            def pump():
+                start = time.monotonic()
+                for i, level in enumerate(envelope):
+                    if stop.is_set():
+                        return
+                    delay = (start + i / fps) - time.monotonic()
+                    if delay > 0:
+                        stop.wait(delay)
+                    if stop.is_set():
+                        return
+                    # Статус жёстко пустой: идёт голос — оверлей покажет TRANSMITTING.
+                    _atomic_write(_state_json(True, level, ""))
+
+            threading.Thread(target=pump, daemon=True, name="eq").start()
+
+        import winsound
+
+        winsound.PlaySound(wav, winsound.SND_FILENAME)
+    except Exception as e:
+        logger.warning(f"winsound: {e}")
+    finally:
+        stop.set()
+        if owned:
+            _cleanup(wav)
+
+
+def _cleanup(path: str):
+    try:
+        os.remove(path)
+    except Exception:
+        pass
+
+
+async def _speak(text: str) -> bool:
+    """Generate TTS and play. Returns True if successful."""
+    async with _tts_lock:
+        _set_speaking(True)
+        _set_status("SYNTHESIZING // VOICE")
+        try:
+            from voice.tts import text_to_speech
+
+            tts_path = await asyncio.wait_for(
+                text_to_speech(text), timeout=120
+            )
+            if not tts_path or not os.path.exists(tts_path):
+                return False
+
+            try:
+                from voice.audiofx import process_speech
+
+                final = await asyncio.wait_for(
+                    asyncio.to_thread(process_speech, tts_path), timeout=30
+                )
+                _cleanup(tts_path)
+            except Exception:
+                final = tts_path
+
+            logger.info("Воспроизведение")
+            await asyncio.to_thread(_play_local, final)
+            _cleanup(final)
+            return True
+        except Exception as e:
+            logger.error(f"TTS: {e}")
+            return False
+        finally:
+            _set_speaking(False)
+            # Страховка от роста temp за долгий стрим: убираем старое (> 1 ч).
+            _prune_temp(3600)
+
+
+# ── Vision commentary loop ──────────────────────────────────────────────────
+
+
+async def _vision_loop():
+    loop = asyncio.get_running_loop()
+    pending = None
+    while True:
+        cycle_start = time.time()
+        # Если предыдущий вызов завис и не уложился в 60с — не плодим очередь,
+        # пропускаем цикл, пока воркер не освободится.
+        if pending is not None and not pending.done():
+            logger.warning("Vision: предыдущий вызов ещё идёт, пропуск цикла")
+            await asyncio.sleep(Config.COMMENT_INTERVAL)
+            continue
+        _set_status("ANALYZING // FRAME")
+        try:
+            pending = loop.run_in_executor(
+                _VISION_EXEC, generate_vision_commentary
+            )
+            result = await asyncio.wait_for(pending, timeout=60)
+        except asyncio.TimeoutError:
+            logger.warning("Vision timeout, фолбек")
+            result = generate_fallback()
+        except Exception as e:
+            logger.error(f"Vision: {type(e).__name__}: {e}")
+            result = generate_fallback()
+
+        if result is None:
+            # Кадр не изменился — молчим, ждём следующий цикл.
+            _set_status("")
+            elapsed = time.time() - cycle_start
+            remaining = Config.COMMENT_INTERVAL - elapsed
+            if remaining > 0:
+                await asyncio.sleep(remaining)
+            continue
+
+        commentary, emotion = result
+        _save_overlay(commentary, emotion)
+        logger.info(f"Комментарий: {commentary}")
+
+        await _speak(commentary)
+
+        elapsed = time.time() - cycle_start
+        remaining = Config.COMMENT_INTERVAL - elapsed
+        if remaining > 0:
+            logger.info(f"Пауза {remaining:.0f}с до следующего цикла")
+            await asyncio.sleep(remaining)
+
+
+# ── Twitch callback ─────────────────────────────────────────────────────────
+
+
+async def _on_chat(user: str, text: str):
+    # Чтение мгновенно, видимая стадия — долгое думание LLM.
+    _set_status("THINKING // LLM")
+    response, emotion = await _brain.generate(_CHAT_SYSTEM, f"{user}: {text}")
+    _save_overlay(response, emotion)
+    await _speak(response)
+
+
+# ── Twitch с автореконнектом ──────────────────────────────────────────────────
+
+
+async def _twitch_loop():
+    from twitch.chat import DurandalBot
+
+    delay = 5
+    while True:
+        bot = None
+        started = time.monotonic()
+        try:
+            bot = DurandalBot(_on_chat)
+            logger.info("Запуск Twitch бота...")
+            await bot.start()
+            logger.warning("Twitch бот остановлен, перезапуск...")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"Twitch: {type(e).__name__}: {e} — рестарт через {delay}с")
+        finally:
+            if bot is not None:
+                try:
+                    await bot.close()
+                except Exception:
+                    pass
+        # Бэкофф растёт только на «шторме» перезапусков; после долгой сессии сбрасываем.
+        if time.monotonic() - started > 60:
+            delay = 5
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, 300)
+
+
+# ── RVC warmup ──────────────────────────────────────────────────────────────
+
+
+def _warmup_rvc():
+    """ Греем демон заранее: первая реплика не будет ждать ~40с загрузки моделей. """
+    try:
+        import struct
+        import wave
+
+        warm = os.path.join(_TEMP_DIR, "_warmup.wav")
+        with wave.open(warm, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(24000)
+            w.writeframes(struct.pack("<" + "h" * 24000, *([0] * 24000)))
+        import rvc_convert
+
+        out = rvc_convert.rvc_convert(
+            warm, f0up_key=1, index_rate=0,
+            resample_sr=24000, rms_mix_rate=0.33, protect=0.33,
+        )
+        _cleanup(out)
+        logger.info("RVC warmup ok")
+    except Exception as e:
+        logger.warning(f"RVC warmup: {type(e).__name__}: {e}")
+    finally:
+        _cleanup(os.path.join(_TEMP_DIR, "_warmup.wav"))
+
+
+# ── LLM warmup ──────────────────────────────────────────────────────────────
+
+
+def _warmup_llm():
+    """ Греем локальную модель заранее: первая реплика не будет ждать загрузки. """
+    from core.ollama import chat as ollama_chat
+
+    try:
+        ollama_chat(
+            [{"role": "user", "content": "Ответь одним словом: готов."}],
+            Config.LLM_MODEL,
+            20,
+            0.5,
+        )
+        logger.info(f"LLM warmup ok: {Config.LLM_MODEL}")
+    except Exception as e:
+        logger.warning(f"LLM warmup {Config.LLM_MODEL}: {type(e).__name__}")
+
+
+# ── Main ────────────────────────────────────────────────────────────────────
+
+
+def _twitch_config_ok() -> bool:
+    return all(
+        [
+            Config.TWITCH_CLIENT_ID,
+            Config.TWITCH_CLIENT_SECRET,
+            Config.TWITCH_BOT_ID,
+            Config.TWITCH_CHANNEL_ID,
+        ]
+    )
+
+
+async def main():
+    from overlay_server import main as overlay_main
+
+    logger.info("Запуск overlay сервера на http://127.0.0.1:9733/overlay")
+    t = threading.Thread(target=overlay_main, daemon=True)
+    t.start()
+    await asyncio.sleep(1)
+
+    _save_overlay("")
+
+    # Ссылки на warmup-задачи держим в локальной переменной: main живёт
+    # пока gather, так что задачи не будут подобраны сборщиком мусора.
+    warmup_tasks: list[asyncio.Task] = []
+    if Config.USE_RVC:
+        logger.info("RVC warmup в фоне...")
+        warmup_tasks.append(asyncio.create_task(asyncio.to_thread(_warmup_rvc)))
+
+    logger.info("LLM warmup в фоне...")
+    warmup_tasks.append(asyncio.create_task(asyncio.to_thread(_warmup_llm)))
+
+    tasks = [asyncio.create_task(_vision_loop())]
+
+    token_file = os.path.join(os.path.dirname(__file__), ".tio.tokens.json")
+    use_twitch = (bool(Config.TWITCH_TOKEN) or os.path.exists(token_file)) and _twitch_config_ok()
+    if use_twitch:
+        tasks.append(asyncio.create_task(_twitch_loop()))
+    else:
+        logger.info("Нет Twitch-токена/ID (см. auth_twitch.py), только офлайн режим")
+
+    try:
+        await asyncio.gather(*tasks)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        logger.info("Остановка...")
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        _set_speaking(False)
+        logger.info("Остановлен")
+
+
+if __name__ == "__main__":
+    import sys
+
+    if sys.version_info < (3, 14):
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    asyncio.run(main())
