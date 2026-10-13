@@ -33,8 +33,9 @@ VOICE_URLS = (
 )
 VOICE_ONNX = os.path.join(_VOICES_DIR, VOICE_NAME + ".onnx")
 
-# Заметно медленнее единицы — размеренная речь вместо скороговорки.
-LENGTH_SCALE = "1.25"
+# Заметно медленнее единицы — размеренная речь вместо скороговорки
+# (≈−29%, в духе edge-Dmitry на −25%).
+LENGTH_SCALE = "1.4"
 
 
 def _download(url: str, dest: str):
