@@ -53,6 +53,36 @@ class DurandalBot(commands.AutoBot):
         self._last_response = 0.0
         self._pending = 0
 
+    def _wanted_subs(self):
+        return [
+            eventsub.ChatMessageSubscription(
+                broadcaster_user_id=Config.TWITCH_CHANNEL_ID,
+                user_id=self.bot_id,
+            )
+        ]
+
+    @staticmethod
+    def _sub_problems(resp) -> list:
+        # 409 (уже подписаны) — не ошибка, как считает и сама twitchio.
+        return [e for e in (resp.errors or [])
+                if getattr(e.error, "status", None) != 409]
+
+    async def _ensure_subscription(self) -> None:
+        """Подписка channel.chat.message с видимым результатом.
+
+        Стартовый subscribe в twitchio нередко обгоняет готовность сессии
+        (тот самый warning 1/1 failed) — дублируем его здесь и в event_ready.
+        """
+        try:
+            resp = await self.multi_subscribe(self._wanted_subs())
+            errs = self._sub_problems(resp)
+            if errs:
+                logger.warning(f"Twitch subscribe: {errs}")
+            else:
+                logger.info("Twitch subscribe ok: channel.chat.message")
+        except Exception as e:
+            logger.error(f"Twitch subscribe: {type(e).__name__}: {e}")
+
     async def setup_hook(self) -> None:
         token = _clean_token(Config.TWITCH_TOKEN)
         if not token:
@@ -74,25 +104,14 @@ class DurandalBot(commands.AutoBot):
     ) -> None:
         await self.add_token(payload.access_token, payload.refresh_token)
         logger.info(f"Twitch OAuth: {payload.user_login} (id={payload.user_id})")
-        try:
-            resp = await self.multi_subscribe(
-                [
-                    eventsub.ChatMessageSubscription(
-                        broadcaster_user_id=Config.TWITCH_CHANNEL_ID,
-                        user_id=self.bot_id,
-                    )
-                ]
-            )
-            if resp.errors:
-                logger.warning(f"Twitch subscribe: {resp.errors}")
-        except Exception as e:
-            logger.error(f"Twitch subscribe: {type(e).__name__}: {e}")
+        await self._ensure_subscription()
 
     async def event_ready(self) -> None:
         logger.info(
             f"Twitch EventSub: #{Config.TWITCH_CHANNEL} "
             f"(bot_id={self.bot_id}) — чат слушается"
         )
+        await self._ensure_subscription()
 
     async def event_message(self, payload: twitchio.ChatMessage) -> None:
         if payload.chatter.id == self.bot_id:

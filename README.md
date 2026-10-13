@@ -169,6 +169,35 @@ dHash-детектор пропускает статичные кадры (`Ка
 </details>
 
 <details>
+<summary><b>Бот не видит чат (нет строк <code>Twitch [ник]:</code> в логе)</b></summary>
+
+1. Проверьте подписку EventSub (выполнять в папке бота; секреты никуда не уходят):
+```powershell
+$t = (Select-String -Path .env -Pattern '^TWITCH_TOKEN=(.*)$').Matches.Groups[1].Value.Trim().Trim('"')
+$cid = (Select-String -Path .env -Pattern '^TWITCH_CLIENT_ID=(.*)$').Matches.Groups[1].Value.Trim()
+(Invoke-RestMethod 'https://api.twitch.tv/helix/eventsub/subscriptions' -Headers @{'Client-Id'=$cid; Authorization="Bearer $($t -replace '^oauth:','')"}).data | Format-Table type,status
+```
+Нужна строка `channel.chat.message` со статусом `enabled`. Нет строки — подписка не встала; статус `authorization_revoked`/`user_removed` — токен протух или не тот аккаунт.
+2. Проверьте сам токен (показывает только логин/скопы/срок — безопасно делиться):
+```powershell
+$t = (Select-String -Path .env -Pattern '^TWITCH_TOKEN=(.*)$').Matches.Groups[1].Value.Trim().Trim('"')
+Invoke-RestMethod 'https://id.twitch.tv/oauth2/validate' -Headers @{Authorization="OAuth $($t -replace '^oauth:','')"} | Select-Object login,user_id,client_id,scopes,expires_in
+```
+В `scopes` обязан быть `user:read:chat`, `client_id` — совпадать с `TWITCH_CLIENT_ID` в `.env`, `user_id` — с `TWITCH_BOT_ID`.
+3. Не сходится — `run.bat auth` заново (войти под аккаунтом бота, разрешить доступ) и перезапуск.
+
+</details>
+
+<details>
+<summary><b>edge-tts отвечает 403 (Microsoft режет IP)</b></summary>
+
+Библиотека свежая, 4 ретрая не помогают — это сетевой блок со стороны Microsoft, а не баг бота (без VPN — 403 на handshake, через VPN — работает). Бот при этом не падает: текст всё равно уходит в оверлей, цикл продолжается.
+- Быстрое лечение: поднять VPN и гнать через него хотя бы TTS. edge-tts уважает `HTTPS_PROXY`, так что можно точечно: `$env:HTTPS_PROXY='http://127.0.0.1:1080'` перед `run.bat` (если VPN-клиент даёт локальный прокси) — остальное (Twitch, Ollama) пойдёт напрямую.
+- Радикальное: офлайн-фолбэк Piper TTS (план) — тембр всё равно переозвучивает RVC, так что базовый голос можно синтезировать локально вообще без сети.
+
+</details>
+
+<details>
 <summary><b>Порт 9733 занят</b></summary>
 
 Остановите старый демо-сервер/копию бота: только один процесс владеет оверлеем. При старте бот поднимает сервер сам.
