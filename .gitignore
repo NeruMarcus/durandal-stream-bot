@@ -16,15 +16,13 @@ temp/*
 bot.log*
 .tio.tokens.json
 
-# RVC weights & indices — крупные бинарники, не для git (LFS/внешний диск)
-models/**/*.pth
-models/**/*.index
-# RVC engine binaries (~530 МБ, качаются отдельно, см. README §RVC голос):
-# hubert_base.pt, f0G40k/f0D40k, rmvpe.pt, uvr5-веса, *.gitignore внутри — от апстрима.
-models/rvc_webui/assets/hubert/
+# RVC: голос Дюрандаля (обученные веса ~82 МБ) — ВЕРСИОНИРУЕТСЯ, это бэкап голоса.
+# Бинарники движка (~530 МБ) в git не влезают (лимит GitHub 100 МБ/файл) —
+# качаются отдельно, см. README §RVC голос.
+models/rvc_webui/assets/hubert/hubert_base.pt
 models/rvc_webui/assets/pretrained/
 models/rvc_webui/assets/pretrained_v2/
-models/rvc_webui/assets/rmvpe/
+models/rvc_webui/assets/rmvpe/rmvpe.pt
 models/rvc_webui/assets/uvr5_weights/
 
 # OS
