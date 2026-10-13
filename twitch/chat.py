@@ -114,21 +114,27 @@ class DurandalBot(commands.AutoBot):
         await self._ensure_subscription()
 
     async def event_message(self, payload: twitchio.ChatMessage) -> None:
+        name = payload.chatter.display_name or payload.chatter.name
         if payload.chatter.id == self.bot_id:
+            # Бот только читает и никогда не пишет сам: это человек пишет
+            # с аккаунта бота (для соло-теста — со второго аккаунта).
+            logger.debug(f"Twitch [{name}]: своё сообщение, пропуск")
             return
         if payload.source_broadcaster is not None:
+            logger.debug(f"Twitch [{name}]: репост shared-чата, пропуск")
             return  # репост из shared-чата, не дублируем
 
         text = (payload.text or "").strip()
         if not text or text.startswith("!"):
+            logger.debug(f"Twitch [{name}]: пустое/команда, пропуск")
             return
 
         now = time.monotonic()
         if now - self._last_response < self._cooldown:
+            logger.debug(f"Twitch [{name}]: кулдаун, пропуск")
             return
         self._last_response = now
 
-        name = payload.chatter.display_name or payload.chatter.name
         logger.info(f"Twitch [{name}]: {text}")
         # Не вешаем диспетчер событий на долгий LLM: отвечаем в фоне.
         # _tts_lock в main всё равно сериализует озвучку, оверлей покажет свежее.
