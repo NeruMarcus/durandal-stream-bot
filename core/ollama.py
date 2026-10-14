@@ -40,7 +40,19 @@ def _to_native(messages: list) -> list:
     return native
 
 
-def chat(messages: list, model: str, max_tokens: int, temperature: float) -> str | None:
+def chat(
+    messages: list,
+    model: str,
+    max_tokens: int,
+    temperature: float,
+    extra_options: dict | None = None,
+) -> str | None:
+    options = {
+        "temperature": temperature,
+        "num_predict": max_tokens,
+    }
+    if extra_options:
+        options.update(extra_options)
     try:
         r = requests.post(
             f"{_host()}/api/chat",
@@ -53,10 +65,7 @@ def chat(messages: list, model: str, max_tokens: int, temperature: float) -> str
                 # Модель не выгружать между запусками бота: холодный старт
                 # (загрузка 3.3 ГБ + первое vision-инференс) упирался в 60с таймаут.
                 "keep_alive": "30m",
-                "options": {
-                    "temperature": temperature,
-                    "num_predict": max_tokens,
-                },
+                "options": options,
             },
             timeout=60,  # локальная модель; совпадает с wait_for в vision-цикле
         )
