@@ -4,6 +4,7 @@ import re
 import base64
 import random
 import threading
+import time
 
 from config import Config
 from core.emotions import EMOTION_OUT, parse_emotion
@@ -97,6 +98,11 @@ _NUMBER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Отличаем «переспросить» (фраза про цифры/повтор) от «звать нечего»
+# (таймаут, пустой ответ): повторный запрос с тем же кадром дешёвый — Ollama
+# кэширует энкодинг картинки, — а вот ждать второй таймаут бессмысленно.
+_REJECT = object()
+
 
 def _strip_detail_line(text: str) -> str:
     cleaned = _DETAIL_RE.sub("", text).strip()
@@ -138,8 +144,11 @@ def _encode_image(path: str) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
-def _cloud_commentary(b64: str, temperature: float = 0.8) -> str | None:
-    """Одна локальная модель: скриншот → фраза Дюрандаля."""
+def _cloud_commentary(b64: str, temperature: float = 0.8) -> str | None | object:
+    """Одна локальная модель: скриншот → фраза Дюрандаля.
+
+    None — звать нечего (таймаут/пусто); _REJECT — фразу надо переспросить.
+    """
     from core.ollama import chat as ollama_chat
 
     user_text = _VISION_USER
@@ -157,30 +166,32 @@ def _cloud_commentary(b64: str, temperature: float = 0.8) -> str | None:
             ],
         },
     ]
+    started = time.time()
     try:
         text = ollama_chat(
             messages,
             Config.LLM_MODEL,
             150,
             temperature,
-            timeout=30,
+            timeout=90,
             extra_options={"repeat_penalty": 1.25, "presence_penalty": 0.3},
         )
     except Exception as e:
-        logger.warning(f"Ollama: {type(e).__name__}, дальше")
+        logger.warning(f"Vision LLM: {type(e).__name__} за {time.time() - started:.0f}с, дальше")
         return None
+    logger.info(f"Vision LLM: {time.time() - started:.1f}с")
     if not text:
         logger.warning("Ollama: пусто, дальше")
         return None
     text = _strip_detail_line(text)
     if _NUMBER_RE.search(text):
         logger.info("Vision: про цифры HUD, переспрос")
-        return None
+        return _REJECT
     if _dedup(text):
         logger.info(f"LLM vision: {Config.LLM_MODEL}")
         return text
     logger.warning("Ollama: повтор, дальше")
-    return None
+    return _REJECT
 
 # ── Pure text fallback (no vision) ────────────────────────────────────────
 
@@ -262,11 +273,16 @@ def generate_vision_commentary() -> tuple[str, str] | None:
         for attempt in range(2):
             temp = 0.7 + attempt * 0.15
             result = _cloud_commentary(b64, temperature=temp)
-            if result:
-                text, emotion = parse_emotion(result)
-                _remember(text)
-                return text, emotion
-        logger.info("Vision 2 попытки — все в dedup, фолбек")
+            if result is None:
+                # Таймаут/пусто: повтор с тем же кадром не спасёт — энкодер
+                # уже не уложился, а ждать второй таймаут значит опоздать с репликой.
+                break
+            if result is _REJECT:
+                continue
+            text, emotion = parse_emotion(str(result))
+            _remember(text)
+            return text, emotion
+        logger.info("Vision: фолбек")
         return generate_fallback()
     except Exception as e:
         logger.error(f"Vision: {e}")

@@ -277,8 +277,8 @@ async def _vision_loop():
     pending = None
     while True:
         cycle_start = time.time()
-        # Если предыдущий вызов завис и не уложился в 60с — не плодим очередь,
-        # пропускаем цикл, пока воркер не освободится.
+        # Если предыдущий вызов завис — не плодим очередь, пропускаем цикл,
+        # пока воркер не освободится.
         if pending is not None and not pending.done():
             logger.warning("Vision: предыдущий вызов ещё идёт, пропуск цикла")
             await asyncio.sleep(Config.COMMENT_INTERVAL)
@@ -288,7 +288,7 @@ async def _vision_loop():
             pending = loop.run_in_executor(
                 _VISION_EXEC, generate_vision_commentary
             )
-            result = await asyncio.wait_for(pending, timeout=60)
+            result = await asyncio.wait_for(pending, timeout=120)
         except asyncio.TimeoutError:
             logger.warning("Vision timeout, фолбек")
             result = generate_fallback()
