@@ -30,6 +30,16 @@ class Config:
     TWITCH_CHANNEL: str = os.getenv("TWITCH_CHANNEL", "")
     CHAT_COOLDOWN: float = float(os.getenv("CHAT_COOLDOWN", "3.0"))
 
+    # Голоса edge-tts по приоритету: "голос[:сдвиг_RVC]" через запятую.
+    # Конкретный голос у Microsoft периодически «замолкает» (сервис отдаёт
+    # пустой ответ, NoAudioReceived) — бот молча переходит к следующему.
+    # Мультиязычные голоса говорят по-русски, поэтому фолбэк тоже мужской.
+    TTS_VOICES: str = os.getenv(
+        "TTS_VOICES",
+        "ru-RU-DmitryNeural,en-US-AndrewMultilingualNeural,"
+        "en-US-BrianMultilingualNeural",
+    )
+
 
 # Валидация: бессмысленные значения молча убили бы бота (цикл 0 сек, <0 и т.д.)
 if Config.COMMENT_INTERVAL < 10:

@@ -29,7 +29,7 @@
 |-------|----------|
 | **Vision commentary** | Каждые 45 с смотрит скриншот; статичный кадр пропускается без LLM-вызова (dHash). Локальная `durandal-gemma` → фолбек-фразы |
 | **Twitch чат** | EventSub (twitchio v3), автореконнект с бэкоффом, кулдаун 3 с, ответы в фоне, контекст 20 сообщений |
-| **RVC голос** | edge-tts (Дмитрий, −25%) → RVC Durandal (e3000, f0up+1) → EQ → тихий эмбиент-дрон |
+| **RVC голос** | edge-tts (Дмитрий −25%; голос недоступен → автопереключение) → RVC Durandal (e3000, f0up+1) → EQ → тихий эмбиент-дрон |
 | **Эмоции** | `sarcastic / angry / mocking / calm / neutral` — цвет чипа и тон комментария |
 | **Песочница** | `run.bat check` — 60+ самопроверок без сети, токенов и GPU |
 
@@ -43,7 +43,7 @@ flowchart LR
     C --> D[💬 Twitch чат\nEventSub]
     D --> E[🧠 Brain\nпамять + эмоции]
     C --> E
-    E --> F[🔊 edge-tts\nДмитрий −25%]
+    E --> F[🔊 edge-tts\nДмитрий −25%\n+ фолбэк голоса]
     F --> G[🎙 RVC daemon\nCUDA, e3000]
     G --> H[🎛 EQ + эмбиент]
     H --> I[🔈 winsound]
@@ -83,6 +83,7 @@ Copy-Item .env.example .env
 | `TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET` | приложение Twitch |
 | `TWITCH_BOT_ID` / `TWITCH_CHANNEL_ID` | числовые ID бота и канала |
 | `USE_RVC` | `true` — голос Дюрандаля, `false` — чистый edge-tts |
+| `TTS_VOICES` | голоса edge-tts по приоритету через запятую; `голос:сдвиг_RVC` транспонирует под RVC |
 | `COMMENT_INTERVAL` | пауза vision-цикла, сек (мин. 10) |
 | `MONITOR_INDEX` | монитор для захвата (0 = основной) |
 | `CHAT_COOLDOWN` | кулдаун ответов в чат, сек |
@@ -191,10 +192,19 @@ Invoke-RestMethod 'https://id.twitch.tv/oauth2/validate' -Headers @{Authorizatio
 </details>
 
 <details>
-<summary><b>edge-tts отвечает 403 (Microsoft режет IP)</b></summary>
+<summary><b>edge-tts молчит: 403 на handshake или NoAudioReceived</b></summary>
 
-Библиотека edge-tts идёт в ногу с Microsoft: сначала обновить (`venv\Scripts\python -m pip install -U edge-tts` — именно так вылечился 403 в октябре 2026, вышла 7.3.1). Если 4 ретрая всё равно не помогают — это сетевой блок со стороны Microsoft, а не баг бота (без VPN — 403 на handshake, через VPN — работает). Бот при этом не падает: текст всё равно уходит в оверлей, цикл продолжается.
-- Быстрое лечение: поднять VPN и гнать через него хотя бы TTS. edge-tts уважает `HTTPS_PROXY`, так что можно точечно: `$env:HTTPS_PROXY='http://127.0.0.1:1080'` перед `run.bat` (если VPN-клиент даёт локальный прокси) — остальное (Twitch, Ollama) пойдёт напрямую.
+Сначала обновить библиотеку — это лечит большинство случаев:
+```powershell
+venv\Scripts\python -m pip install -U edge-tts
+```
+Две разные болезни:
+- **403 (handshake)** — Microsoft режет IP, а не баг бота (без VPN — 403, через VPN — работает). В октябре 2026 ровно это вылечила версия 7.3.1.
+- **NoAudioReceived** — соединение есть, но сервис не отдал ни звука. Наблюдение октября 2026: отвал **по-голосно** — один голос стабильно молчит, а другой в той же сети жив (`ru-RU-DmitryNeural` мёртв, `ru-RU-SvetlanaNeural` / `en-US-AndrewMultilingualNeural` работают). Мультиязычные голоса говорят по-русски, так что фолбэк тоже мужской.
+
+Лечение встроено: `TTS_VOICES` — голоса по приоритету, бот пробует каждый пару раз и молча переходит к следующему (в логе: `edge-tts: <голос> недоступен, переключился на <другой>`). Женский резерв задаётся транспонированием, чтобы Дюрандаль не «поехал» по регистру: `ru-RU-SvetlanaNeural:-11` (октава вниз).
+
+Обход сети через VPN (если нужен именно конкретный голос): edge-tts уважает `HTTPS_PROXY` — `$env:HTTPS_PROXY='http://127.0.0.1:1080'` перед `run.bat` (когда VPN-клиент даёт локальный прокси); Twitch/Ollama пойдут напрямую. Бот при любом раскладе не падает — текст всё равно уходит в оверлей.
 
 </details>
 
