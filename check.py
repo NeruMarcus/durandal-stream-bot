@@ -83,7 +83,7 @@ for p in [
     "README.md", "LICENSE",
     "docs/screenshots/overlay_speaking.png", "docs/screenshots/overlay_idle.png",
     "core/brain.py", "core/emotions.py", "core/memory.py", "core/ollama.py", "Modelfile",
-    "twitch/chat.py", "voice/tts.py", "voice/piper_tts.py", "voice/audiofx.py",
+    "twitch/chat.py", "voice/tts.py", "voice/audiofx.py",
     "temp/.gitkeep", "auth_twitch.py",
 ]:
     if os.path.exists(os.path.join(ROOT, p)):
@@ -263,37 +263,6 @@ try:
     ok("rms_envelope: битый путь -> []")
 except Exception as e:
     fail("rms_envelope", f"{type(e).__name__}: {e}")
-
-print("== 6c. Piper offline TTS (SKIP = движок не скачан) ==")
-try:
-    import array as _arr2
-    import wave as _wave2
-    from voice import piper_tts as _pt
-    assert _pt.BIN_URL.startswith("https://") and _pt.BIN_URL.endswith(".zip")
-    assert len(_pt.VOICE_URLS) == 2
-    ok("piper: модуль + URL движка и голоса")
-    if _pt._find_exe() and os.path.isfile(_pt.VOICE_ONNX):
-        _out = None
-        try:
-            _out = _pt.synthesize("Тестовая фраза Дюрандаля.")
-            with _wave2.open(_out, "rb") as w:
-                assert w.getsampwidth() == 2 and w.getframerate() == 22050
-                _dur = w.getnframes() / w.getframerate()
-                _s = _arr2.array("h")
-                _s.frombytes(w.readframes(w.getnframes()))
-            assert max(abs(x) for x in _s) > 1000, "тишина"
-            assert _dur > 1.6, f"растяжение не применилось: {_dur:.2f}с"
-            ok(f"piper: офлайн-синтез работает (22050 Гц, {_dur:.1f}с, не тишина)")
-        finally:
-            if _out:
-                try:
-                    os.remove(_out)
-                except OSError:
-                    pass
-    else:
-        skip("piper", "движок/голос не скачаны (run.bat piper)")
-except Exception as e:
-    fail("piper", f"{type(e).__name__}: {e}")
 
 print("== 7. Опциональные зависимости (SKIP = нет в этом python) ==")
 for mod, label in [

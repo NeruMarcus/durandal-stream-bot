@@ -9,7 +9,6 @@ build/
 .env
 venv/
 rvc_env/
-vendor/
 
 # Runtime
 temp/*

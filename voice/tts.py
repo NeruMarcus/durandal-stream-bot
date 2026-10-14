@@ -98,18 +98,6 @@ async def text_to_speech(text: str) -> str:
             if attempt < 3:
                 await asyncio.sleep(min(2 ** (attempt + 1), 10))
     if last_err is not None:
-        # edge-tts стабильно недоступен (403/IP-блок) — офлайн-фолбэк Piper.
-        # Тембр всё равно переозвучивает RVC, так что смена базы безопасна.
-        logger.warning("edge-tts недоступен, переключаюсь на офлайн Piper...")
-        try:
-            from voice.piper_tts import synthesize as piper_synthesize
-
-            raw = await asyncio.to_thread(piper_synthesize, text)
-            last_err = None
-            logger.info("Piper: синтез ok")
-        except Exception as e:
-            logger.error(f"Piper: {type(e).__name__}: {e}")
-    if last_err is not None:
         raise last_err
 
     # В отдельном потоке: RVC занимает секунды и не должен вешать цикл событий.
