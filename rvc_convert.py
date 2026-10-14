@@ -133,6 +133,28 @@ def _stop_daemon():
 atexit.register(_stop_daemon)  # один раз на модуль, не на каждый рестарт
 
 
+_READ_TIMEOUT = 40  # сек: сколько ждём ответ демона на один запрос
+
+
+def _readline_timeout(proc, timeout: float) -> str:
+    """ readline с лимитом: демон, зависший на GPU, иначе держит поток вечно. """
+    box: list[str] = []
+    done = threading.Event()
+
+    def _reader():
+        try:
+            box.append(proc.stdout.readline())
+        except Exception:
+            box.append("")
+        finally:
+            done.set()
+
+    threading.Thread(target=_reader, daemon=True).start()
+    if not done.wait(timeout):
+        return ""
+    return box[0] if box else ""
+
+
 def rvc_convert(
     input_wav: str,
     output_wav: str | None = None,
@@ -144,7 +166,7 @@ def rvc_convert(
     resample_sr: int = 24000,
     rms_mix_rate: float = 1.0,
 ) -> str:
-    for attempt in range(3):
+    for attempt in range(2):
         _ensure_daemon()
 
         _, weights_dir = _find_weights_dir()
@@ -172,9 +194,11 @@ def rvc_convert(
         _proc.stdin.write(json.dumps(request) + "\n")
         _proc.stdin.flush()
 
-        line = _proc.stdout.readline()
+        line = _readline_timeout(_proc, _READ_TIMEOUT)
         if not line:
-            logger.warning("RVC daemon умер, перезапуск...")
+            # Демон завис (CUDA под нагрузкой игры) или умер: убиваем его,
+            # иначе заблокированный GPU-контекст висит до конца стрима.
+            logger.warning("RVC daemon завис/умер, перезапуск...")
             _stop_daemon()
             continue
 
@@ -184,4 +208,4 @@ def rvc_convert(
 
         return output_wav
 
-    raise RuntimeError("RVC daemon не смог обработать запрос после 3 попыток")
+    raise RuntimeError("RVC daemon не смог обработать запрос после 2 попыток")

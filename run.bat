@@ -32,6 +32,11 @@ goto :end
 
 :run_venv
 "%PYEXE%" "%TARGET%"
+if not "%TARGET%"=="main.py" goto end
+echo.
+echo   [WARN] bot exited, restart in 5s... (Ctrl+C to stop)
+timeout /t 5 /nobreak >nul
+goto run_venv
 
 :end
 pause

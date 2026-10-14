@@ -296,26 +296,34 @@ async def _vision_loop():
             logger.error(f"Vision: {type(e).__name__}: {e}")
             result = generate_fallback()
 
-        if result is None:
-            # Кадр не изменился — молчим, ждём следующий цикл.
-            _set_status("")
+        # Тело цикла в try: любая ошибка (оверлей, звук, статус) не должна
+        # убивать задачу — иначе asyncio.gather падает и бот молча умирает.
+        try:
+            if result is None:
+                # Кадр не изменился — молчим, ждём следующий цикл.
+                _set_status("")
+                elapsed = time.time() - cycle_start
+                remaining = Config.COMMENT_INTERVAL - elapsed
+                if remaining > 0:
+                    await asyncio.sleep(remaining)
+                continue
+
+            commentary, emotion = result
+            _save_overlay(commentary, emotion)
+            logger.info(f"Комментарий: {commentary}")
+
+            await _speak(commentary)
+
             elapsed = time.time() - cycle_start
             remaining = Config.COMMENT_INTERVAL - elapsed
             if remaining > 0:
+                logger.info(f"Пауза {remaining:.0f}с до следующего цикла")
                 await asyncio.sleep(remaining)
-            continue
-
-        commentary, emotion = result
-        _save_overlay(commentary, emotion)
-        logger.info(f"Комментарий: {commentary}")
-
-        await _speak(commentary)
-
-        elapsed = time.time() - cycle_start
-        remaining = Config.COMMENT_INTERVAL - elapsed
-        if remaining > 0:
-            logger.info(f"Пауза {remaining:.0f}с до следующего цикла")
-            await asyncio.sleep(remaining)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"Vision-цикл: {type(e).__name__}: {e}")
+            await asyncio.sleep(5)
 
 
 # ── Twitch callback ─────────────────────────────────────────────────────────
@@ -468,7 +476,27 @@ async def main():
 
 
 if __name__ == "__main__":
+    import faulthandler
     import sys
+    import traceback
+
+    # Жёсткие падения (нативный крэш, убийство процесса) пишем в файл: в
+    # консоли traceback теряется, а по bot.log конец выглядит «просто оборвался».
+    _crash = open(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "crash.log"),
+        "a",
+        encoding="utf-8",
+        buffering=1,
+    )
+    faulthandler.enable(file=_crash)
+
+    def _excepthook(exc_type, exc, tb):
+        logger.error("Необработанное исключение:")
+        for line in traceback.format_exception(exc_type, exc, tb):
+            for part in line.rstrip("\n").splitlines():
+                logger.error(part)
+
+    sys.excepthook = _excepthook
 
     if sys.version_info < (3, 14):
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())

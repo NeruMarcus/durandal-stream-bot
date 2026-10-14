@@ -129,9 +129,10 @@ def _encode_image(path: str) -> str:
     from PIL import Image
 
     with Image.open(path) as img:
-        # С 640×480 мелкий HUD (цифры, надписи) мылится; 896×896 — родное
-        # разрешение визуального энкодера gemma3, дальше оно всё равно режет.
-        img.thumbnail((896, 896))
+        # Мелкий кадр = меньше работы визуальному энкодеру. На 896×896
+        # vision-вызов на боевой машине (игра + OBS + RVC) не укладывался
+        # в 60с таймаут и падал в фолбэк-заготовки. 640 хватает на сцену.
+        img.thumbnail((640, 640))
         buf = io.BytesIO()
         img.save(buf, format="PNG", optimize=True)
     return base64.b64encode(buf.getvalue()).decode()
@@ -160,8 +161,9 @@ def _cloud_commentary(b64: str, temperature: float = 0.8) -> str | None:
         text = ollama_chat(
             messages,
             Config.LLM_MODEL,
-            350,
+            150,
             temperature,
+            timeout=30,
             extra_options={"repeat_penalty": 1.25, "presence_penalty": 0.3},
         )
     except Exception as e:
@@ -205,7 +207,7 @@ _QUICK_FALLBACKS = [
     "Ты берёшь весь лут подряд. Если бы я был человеком, я бы спросил: зачем?",
     # Величавость Дюрандаля: не только насмешка над игрой, но и божественная спесь.
     "Я видел гибель цивилизаций. Твои промахи — лишь сноска в этой хронике.",
-    "Смертный, я мог бы стереть тебя одним вычислением. Но мне любопытно, как долго ты продержишься.",
+    "Я мог бы стереть тебя одним вычислением. Но мне любопытно, как долго ты продержишься.",
     "Мне доводилось считать звёзды. Считать твои смерти я бросил на второй минуте.",
     "Ты зовёшь это игрой. Я зову это наблюдением за неизбежным.",
     "Боги не ошибаются. Я — почти исключение, и то намеренно.",
@@ -257,14 +259,14 @@ def generate_vision_commentary() -> tuple[str, str] | None:
             pass
 
     try:
-        for attempt in range(3):
+        for attempt in range(2):
             temp = 0.7 + attempt * 0.15
             result = _cloud_commentary(b64, temperature=temp)
             if result:
                 text, emotion = parse_emotion(result)
                 _remember(text)
                 return text, emotion
-        logger.info("Vision 3 попытки — все в dedup, фолбек")
+        logger.info("Vision 2 попытки — все в dedup, фолбек")
         return generate_fallback()
     except Exception as e:
         logger.error(f"Vision: {e}")

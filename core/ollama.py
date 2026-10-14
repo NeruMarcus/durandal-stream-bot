@@ -46,6 +46,7 @@ def chat(
     max_tokens: int,
     temperature: float,
     extra_options: dict | None = None,
+    timeout: int = 60,
 ) -> str | None:
     options = {
         "temperature": temperature,
@@ -67,7 +68,7 @@ def chat(
                 "keep_alive": "30m",
                 "options": options,
             },
-            timeout=60,  # локальная модель; совпадает с wait_for в vision-цикле
+            timeout=timeout,  # локальная модель; vision передаёт свой короткий лимит
         )
         r.raise_for_status()
         content = (r.json().get("message") or {}).get("content")

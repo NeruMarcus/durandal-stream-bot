@@ -50,7 +50,8 @@ def _get_ffmpeg():
 async def _edge_save(text: str, path: str, voice: str = _DEFAULT_VOICE):
     import edge_tts
     tts = edge_tts.Communicate(text, voice=voice, rate="-25%")
-    await tts.save(path)
+    # Сеть до Microsoft иногда молчит: без лимита cycle висел до общего 120с.
+    await asyncio.wait_for(tts.save(path), timeout=25)
 
 
 def _to_24k(in_path: str) -> str:
@@ -84,10 +85,15 @@ def _post_process(raw: str, f0up_key: int = _DEFAULT_F0) -> str:
     try:
         if Config.USE_RVC:
             import rvc_convert
-            rvc_out = rvc_convert.rvc_convert(
-                src24, f0up_key=f0up_key, index_rate=0,
-                resample_sr=24000, rms_mix_rate=0.33, protect=0.33,
-            )
+            try:
+                rvc_out = rvc_convert.rvc_convert(
+                    src24, f0up_key=f0up_key, index_rate=0,
+                    resample_sr=24000, rms_mix_rate=0.33, protect=0.33,
+                )
+            except Exception as e:
+                # Лучше голос без тембра Дюрандаля, чем молчание в эфире.
+                logger.warning(f"RVC недоступен ({e}), голос без конверсии")
+                return _apply_eq(src24)
             return _apply_eq(rvc_out)
         return _apply_eq(src24)
     finally:
