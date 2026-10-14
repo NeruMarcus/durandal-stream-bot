@@ -36,7 +36,7 @@ class Config:
     # Мультиязычные голоса говорят по-русски, поэтому фолбэк тоже мужской.
     TTS_VOICES: str = os.getenv(
         "TTS_VOICES",
-        "ru-RU-DmitryNeural,en-US-AndrewMultilingualNeural,"
+        "en-US-AndrewMultilingualNeural,ru-RU-DmitryNeural,"
         "en-US-BrianMultilingualNeural",
     )
 
