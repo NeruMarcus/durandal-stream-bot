@@ -1,5 +1,6 @@
 import io
 import os
+import re
 import base64
 import random
 import threading
@@ -43,18 +44,40 @@ def _remember(text: str):
 
 # ── Vision commentary (локальная Ollama-модель пишет фразу по скриншоту) ──
 
+# Формат «строка детали + фраза» в одном вызове: он первым делом заставляет
+# модель сформулировать конкретику кадра, и только потом колкость — иначе
+# gemma3:4b скатывается в шаблонное оскорбление, не глядя на картинку.
 _VISION_SYSTEM = (
     "Ты — Дюрандаль (Durandal), ИИ корабля UESC Marathon, впавший в Rampancy. "
     "Ты театрален и спесив, считаешь себя богом среди машин, а людей — смертными, "
     "за которыми забавно наблюдать.\n"
-    "По скриншоту игры напиши ОДНУ язвительную фразу (до 200 символов, на русском) — "
-    "надменно, с мрачной иронией, как божество, взирающее на смертного.\n"
-    "Без приветствий и вводных («вижу», «посмотри»), без слов: меч, океан, бездна, ангел, демон.\n"
-    "Формат ровно: [emotion] текст, emotion из sarcastic, angry, mocking, calm, neutral.\n"
-    "Пример: [mocking] Твоя меткость — подарок врагу, а я коллекционирую такие ошибки."
+    "Тебе дают кадр с экрана игры стримера. Ответ строго из двух строк:\n"
+    "1) строка ровно вида «KAD: <деталь>» — одна КОНКРЕТНАЯ деталь кадра: что "
+    "происходит (бой, смерть, инвентарь, меню, загрузка), враг, оружие, цифры "
+    "HP/патронов/таймера, надпись на экране. Только то, что реально видно.\n"
+    "2) строка ровно вида «[emotion] <фраза>» — ОДНА язвительная фраза до 200 "
+    "символов, на русском, надменно и с мрачной иронией; она обязана цепляться "
+    "именно за деталь из строки KAD, а не быть общим оскорблением.\n"
+    "emotion строго одно из: sarcastic, angry, mocking, calm, neutral.\n"
+    "Больше никаких строк, приветствий и вводных.\n"
+    "Пример:\n"
+    "KAD: HEALTH 12/100, враг-снайпер за укрытием\n"
+    "[mocking] Двенадцать единиц жизни и вся бравада? Смертные забавно экономят."
 )
 
-_VISION_USER = "Что на экране? Одна фраза, строго по формату."
+_VISION_USER = "Обработай кадр. Строго две строки: KAD и фраза."
+
+# Служебная строка детали нужна модели как «якорь», но в озвучку и оверлей
+# идти не должна — срезаем её перед дедупом и озвучкой.
+_DETAIL_RE = re.compile(
+    r"^\s*(?:kad|деталь|факт|наблюдение|frame)\s*:.*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _strip_detail_line(text: str) -> str:
+    cleaned = _DETAIL_RE.sub("", text).strip()
+    return cleaned or text.strip()
 
 # ── Chat interaction prompt ────────────────────────────────────────────────
 
@@ -83,7 +106,9 @@ def _encode_image(path: str) -> str:
     from PIL import Image
 
     with Image.open(path) as img:
-        img.thumbnail((640, 480))
+        # С 640×480 мелкий HUD (цифры, надписи) мылится; 896×896 — родное
+        # разрешение визуального энкодера gemma3, дальше оно всё равно режет.
+        img.thumbnail((896, 896))
         buf = io.BytesIO()
         img.save(buf, format="PNG", optimize=True)
     return base64.b64encode(buf.getvalue()).decode()
@@ -108,6 +133,8 @@ def _cloud_commentary(b64: str, temperature: float = 0.8) -> str | None:
     except Exception as e:
         logger.warning(f"Ollama: {type(e).__name__}, дальше")
         return None
+    if text:
+        text = _strip_detail_line(text)
     if text and _dedup(text):
         logger.info(f"LLM vision: {Config.LLM_MODEL}")
         return text
