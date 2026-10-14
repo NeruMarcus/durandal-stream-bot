@@ -440,8 +440,11 @@ async def main():
         logger.info("RVC warmup в фоне...")
         warmup_tasks.append(asyncio.create_task(asyncio.to_thread(_warmup_rvc)))
 
-    logger.info("LLM warmup в фоне...")
-    warmup_tasks.append(asyncio.create_task(asyncio.to_thread(_warmup_llm)))
+    # LLM греем СТРОГО до старта vision-цикла и ждём: холодная модель +
+    # параллельный vision-запрос сериализуются в llama-server и первый
+    # комментарий упирается в 60с таймаут. Warmup = загрузчик + гейт.
+    logger.info("LLM warmup, ждём прогрев модели...")
+    await asyncio.to_thread(_warmup_llm)
 
     tasks = [asyncio.create_task(_vision_loop())]
 

@@ -157,7 +157,7 @@ venv\Scripts\python -m edge_tts --text "тест" --write-media temp\test.mp3
 <details>
 <summary><b>Первая реплика готовится ~40 секунд</b></summary>
 
-Так и задумано один раз: при старте греются RVC-демон (загрузка модели в VRAM) и Ollama-модель. Смотрите лог: `RVC warmup ok`, `LLM warmup ok`.
+Так и задумано один раз: при старте греются RVC-демон (загрузка модели в VRAM) и Ollama-модель. Смотрите лог: `RVC warmup ok`, `LLM warmup ok`. Vision-цикл стартует только после прогрева LLM, а модель держится в VRAM 30 минут (`keep_alive`) — иначе холодный старт упирается в 60с таймаут первого комментария.
 
 </details>
 

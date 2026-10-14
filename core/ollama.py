@@ -50,6 +50,9 @@ def chat(messages: list, model: str, max_tokens: int, temperature: float) -> str
                 "messages": _to_native(messages),
                 "stream": False,
                 "think": False,
+                # Модель не выгружать между запусками бота: холодный старт
+                # (загрузка 3.3 ГБ + первое vision-инференс) упирался в 60с таймаут.
+                "keep_alive": "30m",
                 "options": {
                     "temperature": temperature,
                     "num_predict": max_tokens,
