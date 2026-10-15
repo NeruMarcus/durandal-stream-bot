@@ -175,7 +175,14 @@ def _strip_detail_line(text: str) -> str:
 # Маленькая модель иногда читает крупную стилизованную надпись по буквам и
 # выдаёт бессмыслицу («Бийша ботов убициа»), а стадия 2 ставит этот обрывок в
 # начало фразы. Промпт помогает через раз — срезаем цитату из начала, если
-# после неё остаётся внятная фраза (иначе переспрос).
+# после неё остаётся внятная фраза.
+# Отдельный случай: модель оборачивает в кавычки весь свой ответ («[mocking] …»)
+# — это формат, а не надпись: кавычки снимаем, фразу оставляем. Раньше такие
+# ответы отбрасывались как «фраза из одной надписи» и уходили в заготовку.
+_FULLY_QUOTED_RE = re.compile(
+    r"^\s*(?:«(?P<a>.*)»|\"(?P<b>.*)\"|“(?P<c>.*)”|„(?P<d>.*)“|'(?P<e>.*)')\s*$",
+    re.DOTALL,
+)
 _LEAD_SCREEN_RE = re.compile(
     r"^\s*(?:[«\"“„']([^»\"“”']{1,70})[»\"“”']?"
     r"|([А-Яа-яЁёA-Za-z][^\"“”»]{0,70})[\"“”»])"
@@ -184,13 +191,25 @@ _LEAD_SCREEN_RE = re.compile(
 
 
 def _strip_leading_screen_text(text: str) -> str:
+    q = _FULLY_QUOTED_RE.match(text)
+    if q:
+        inner = _strip_detail_line(next(g for g in q.groups() if g).strip())
+        return inner[:1].upper() + inner[1:] if inner else ""
+
     m = _LEAD_SCREEN_RE.match(text)
     if not m:
         return text
+    frag = m.group(0)
     rest = text[m.end():].lstrip(" \t—–-\"'«»“”„.,!?;:")
-    if len(rest.split()) < 3:
-        return ""
-    return rest[:1].upper() + rest[1:]
+    if len(rest.split()) >= 3:
+        return rest[:1].upper() + rest[1:]
+    # Продолжения нет. Длинная цитата — это полноценная реплика в кавычках,
+    # её раскрываем; короткий обрывок — почти наверняка надпись с экрана, и
+    # озвучивать её нельзя.
+    if len(frag.split()) >= 4:
+        inner = text.strip().strip("«»\"“”„'").strip(" \t—–-.,!?;:")
+        return inner[:1].upper() + inner[1:] if inner else ""
+    return ""
 
 # ── Chat interaction prompt ────────────────────────────────────────────────
 
@@ -234,7 +253,7 @@ def _encode_image(path: str) -> str:
 
 # Слова-костыли модель соблюдает через раз («жалкий», «хаотичное» бывали в
 # эфире), поэтому ловим их постом по основам — со склонениями. Срабатывание =
-# переспрос фразы (дешёвый: кадр уже закодирован, текстовый вызов ~2с).
+# замена/срез, а переспрос — только если костыль всё равно остался.
 _CRUTCH_RE = re.compile(
     r"(\bсмертн\w*|\bжалк\w*|\bпыль\w*|\bбездн\w*|\bхаос\w*|\bхаот\w*|"
     r"\bстратег\w*|\bничтож\w*|\bэхо\w*|\bвсплеск\w*)",
@@ -268,6 +287,16 @@ _CRUTCH_WORD_SWAP = {
     "стратег": "тактик", "стратега": "тактика", "стратегом": "тактиком",
 }
 
+# Прилагательное-костыль при существительном почти всегда лишнее («жалкая
+# попытка», «ничтожный раннер») — убираем слово целиком, а не меняем на
+# синоним: одна замена («жалкий» → «убогий») сама становится повтором — за
+# 40 минут модель выдала костыль 16 раз, и все сели в одно слово. Если
+# опоры-существительного нет (сказуемое «твои потуги жалки»), меняем основу.
+_CRUTCH_ADJ_RE = re.compile(
+    r"\b(?:жалк|ничтожн)\w*\s+(?=[«\"“”']?[А-Яа-яЁёA-Za-z])",
+    re.IGNORECASE,
+)
+
 
 def _match_case(source: str, replacement: str) -> str:
     if source[:1].isupper():
@@ -276,13 +305,18 @@ def _match_case(source: str, replacement: str) -> str:
 
 
 def _decrutch(text: str) -> str:
+    text = _CRUTCH_ADJ_RE.sub("", text)
     for rx, stem in _CRUTCH_STEM_SWAP:
         text = rx.sub(lambda m: _match_case(m.group(0), stem + m.group(1)), text)
-    return re.sub(
+    text = re.sub(
         r"\b\w+\b",
         lambda m: _match_case(m.group(0), _CRUTCH_WORD_SWAP.get(m.group(0).lower(), m.group(0))),
         text,
     )
+    # Слово могли срезать в самом начале — вернём заглавную букву.
+    if text[:1].islower():
+        text = text[:1].upper() + text[1:]
+    return text
 
 
 # Зачины модель тоже соблюдает через раз — ловим постом: тег эмоции,
@@ -371,6 +405,13 @@ def _phrase_from_scene(desc: str, temperature: float = 0.65) -> str | None | obj
         logger.warning("Vision фраза: пусто, дальше")
         return None
     text = _strip_detail_line(text)
+    # Модель копирует формат промпта («реплика A | реплика B») — в эфир нужна одна.
+    if " | " in text:
+        text = text.split(" | ", 1)[0].strip()
+    # Редкий сбой: вместо реплики модель переписывает сам промпт.
+    if text.lower().startswith("описание кадра"):
+        logger.info(f"Vision: модель повторила промпт, переспрос: {text[:160]}")
+        return _REJECT
     # Отброшенное логируем текстом: иначе слепые «переспросы» не диагностировать.
     leading = _strip_leading_screen_text(text)
     if leading != text:
