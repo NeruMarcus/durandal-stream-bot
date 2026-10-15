@@ -332,7 +332,9 @@ def _cloud_commentary(b64: str, temperature: float = 0.65) -> str | None | objec
     desc = _describe_scene(b64)
     if desc is None:
         return None
-    logger.info(f"Vision сцена: {desc[:220]}")
+    # Пишем целиком: обрезанный лог («панель управления с…») неотличим от
+    # оборванной мысли модели и мешает сверять описание с экраном.
+    logger.info(f"Vision сцена: {desc}")
     for i in range(2):
         result = _phrase_from_scene(desc, temperature=temperature + i * 0.15)
         if result is None:
