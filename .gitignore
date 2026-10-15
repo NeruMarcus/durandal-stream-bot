@@ -11,8 +11,11 @@ venv/
 rvc_env/
 
 # Runtime
-temp/*
+temp/
 !temp/.gitkeep
+*.wav
+*.mp3
+overlay_state.json
 bot.log*
 *.log
 .tio.tokens.json

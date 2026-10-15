@@ -29,21 +29,25 @@ class Brain:
         since_last = now - self._last_request
         if since_last < 2.0:
             await asyncio.sleep(2.0 - since_last)
+        # Троттл обновляем сразу: иначе серия ошибок даёт burst повторных
+        # запросов, когда Ollama и так под нагрузкой.
+        self._last_request = time.time()
 
         messages = [{"role": "system", "content": system}]
-        messages.extend(self.memory.get_context(20))
+        messages.extend(self.memory.get_context(12))
         messages.append({"role": "user", "content": user})
 
         from core.ollama import chat as ollama_chat
 
         try:
+            # 180, а не 300: sanitize всё равно режет до ~220 символов,
+            # хвост генерации под нагрузкой — лишние секунды молчания.
             text = await asyncio.to_thread(
-                ollama_chat, messages, Config.LLM_MODEL, 300, 0.85
+                ollama_chat, messages, Config.LLM_MODEL, 180, 0.85
             )
         except Exception as e:
             logger.warning(f"Ollama chat: {type(e).__name__}")
             return random.choice(_CHAT_FALLBACKS), "neutral"
-        self._last_request = now
         if not text:
             return random.choice(_CHAT_FALLBACKS), "neutral"
 

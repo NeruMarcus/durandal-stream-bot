@@ -8,8 +8,11 @@ _LOG_FILE = os.path.join(os.path.dirname(__file__), "bot.log")
 
 
 def setup_logger(name: str = "durandal") -> logging.Logger:
+    # Корневой трогаем только уровнем: раньше здесь стоял DEBUG, и весь
+    # DEBUG-шум requests/twitchio/PIL лился в bot.log. Наши DEBUG — через
+    # именованный логгер в тот же файл, чужие отсекаются уровнем root=INFO.
     root = logging.getLogger()
-    root.setLevel(logging.DEBUG)
+    root.setLevel(logging.INFO)
 
     fmt = logging.Formatter(
         "[%(asctime)s] %(levelname)s %(message)s", datefmt="%H:%M:%S"

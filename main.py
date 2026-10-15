@@ -61,7 +61,9 @@ def _prune_temp(max_age_sec: float | None = None):
         logger.warning(f"temp очистка: {e}")
 
 
-_prune_temp()
+# Стартовый проход — только из main(): import модуля не должен стирать файлы.
+def _prune_startup():
+    _prune_temp()
 
 _tts_lock = asyncio.Lock()
 _brain = Brain()
@@ -74,7 +76,9 @@ _VISION_EXEC = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vision")
 
 
 _current_overlay = {"text": "", "emotion": "neutral", "status": ""}
-_state_lock = threading.Lock()
+# RLock: мутация кадра и запись файла — одна атомарная секция (_state_json
+# читает словарь, _atomic_write тоже берёт лок).
+_state_lock = threading.RLock()
 _speaking = False
 
 
@@ -114,23 +118,26 @@ def _state_json(speaking: bool, energy: float, status: str | None = None) -> str
 
 
 def _save_overlay(text: str, emotion: str = "neutral", speaking: bool = False):
-    _current_overlay["text"] = text
-    _current_overlay["emotion"] = emotion
-    _current_overlay["status"] = ""
-    _atomic_write(_state_json(speaking, 0.0))
+    with _state_lock:
+        _current_overlay["text"] = text
+        _current_overlay["emotion"] = emotion
+        _current_overlay["status"] = ""
+        _atomic_write(_state_json(speaking, 0.0))
 
 
 def _set_speaking(on: bool):
     global _speaking
-    _speaking = on
-    _current_overlay["status"] = ""
-    _atomic_write(_state_json(on, 0.0))
+    with _state_lock:
+        _speaking = on
+        _current_overlay["status"] = ""
+        _atomic_write(_state_json(on, 0.0))
 
 
 def _set_status(status: str):
     """Стадия пайплайна в шапку оверлея (ANALYZING/THINKING/SYNTHESIZING)."""
-    _current_overlay["status"] = status
-    _atomic_write(_state_json(_speaking, 0.0))
+    with _state_lock:
+        _current_overlay["status"] = status
+        _atomic_write(_state_json(_speaking, 0.0))
 
 
 # ── Audio pipeline ──────────────────────────────────────────────────────────
@@ -181,12 +188,17 @@ def _play_local(path: str):
         fd, wav = tempfile.mkstemp(suffix=".wav")
         os.close(fd)
         owned = True
-        r = subprocess.run(
-            [_FFMPEG, "-y", "-i", path, "-sample_fmt", "s16", "-f", "wav", wav],
-            capture_output=True,
-            check=False,
-        )
-        if r.returncode != 0:
+        try:
+            r = subprocess.run(
+                [_FFMPEG, "-y", "-i", path, "-sample_fmt", "s16", "-f", "wav", wav],
+                capture_output=True,
+                check=False,
+                timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("ffmpeg convert: timeout, копия без конверсии")
+            r = None
+        if r is None or r.returncode != 0:
             shutil.copy2(path, wav)
     stop = threading.Event()
     try:
@@ -273,6 +285,7 @@ async def _speak(text: str) -> bool:
 
 
 async def _vision_loop():
+    global _VISION_EXEC
     loop = asyncio.get_running_loop()
     pending = None
     while True:
@@ -292,6 +305,17 @@ async def _vision_loop():
         except asyncio.TimeoutError:
             logger.warning("Vision timeout, фолбек")
             result = generate_fallback()
+            # wait_for поток не убивает: зависший воркер иначе держал бы
+            # единственный слот вечно и все следующие циклы пропускались бы.
+            # Старый executor глушим, дальше работает свежий; зависший поток
+            # умирает сам, когда его HTTP-таймаут (90с) догорит.
+            if pending is not None and not pending.done():
+                try:
+                    _VISION_EXEC.shutdown(wait=False, cancel_futures=True)
+                except Exception:
+                    pass
+                _VISION_EXEC = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vision")
+                pending = None
         except Exception as e:
             logger.error(f"Vision: {type(e).__name__}: {e}")
             result = generate_fallback()
@@ -376,7 +400,6 @@ def _warmup_rvc():
     """ Греем демон заранее: первая реплика не будет ждать ~40с загрузки моделей. """
     try:
         import struct
-        import wave
 
         warm = os.path.join(_TEMP_DIR, "_warmup.wav")
         with wave.open(warm, "wb") as w:
@@ -406,18 +429,33 @@ def _warmup_llm():
     from core.ollama import chat as ollama_chat
 
     try:
-        ollama_chat(
+        text = ollama_chat(
             [{"role": "user", "content": "Ответь одним словом: готов."}],
             Config.LLM_MODEL,
             20,
             0.5,
         )
-        logger.info(f"LLM warmup ok: {Config.LLM_MODEL}")
+        if text:
+            logger.info(f"LLM warmup ok: {Config.LLM_MODEL}")
+        else:
+            logger.warning(f"LLM warmup {Config.LLM_MODEL}: пустой ответ")
     except Exception as e:
         logger.warning(f"LLM warmup {Config.LLM_MODEL}: {type(e).__name__}")
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
+
+
+def _overlay_port_busy(host: str = "127.0.0.1", port: int = 9733) -> bool:
+    """Порт оверлея уже слушают: второй сервер в daemon-потоке умер бы молча."""
+    import socket
+
+    try:
+        s = socket.create_connection((host, port), timeout=1)
+        s.close()
+        return True
+    except OSError:
+        return False
 
 
 def _twitch_config_ok() -> bool:
@@ -434,10 +472,19 @@ def _twitch_config_ok() -> bool:
 async def main():
     from overlay_server import main as overlay_main
 
-    logger.info("Запуск overlay сервера на http://127.0.0.1:9733/overlay")
-    t = threading.Thread(target=overlay_main, daemon=True)
-    t.start()
-    await asyncio.sleep(1)
+    _prune_startup()
+
+    if _overlay_port_busy():
+        logger.warning(
+            "Порт 9733 уже занят — похоже, оверлей уже запущен "
+            "(вторая копия бота?). Этот экземпляр state писать будет, "
+            "а сервер не поднимаю."
+        )
+    else:
+        logger.info("Запуск overlay сервера на http://127.0.0.1:9733/overlay")
+        t = threading.Thread(target=overlay_main, daemon=True)
+        t.start()
+        await asyncio.sleep(1)
 
     _save_overlay("")
 

@@ -2,6 +2,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 
 import imageio_ffmpeg
 
@@ -9,16 +10,27 @@ from logger import logger
 
 _FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 _AMBIENT_PATH = None
+_AMBIENT_LOCK = threading.Lock()
 # Стабильный путь в проектном temp/cache: дрон генерируется один раз
 # (~57 МБ) и переиспользуется между перезапусками, а не утекает
 # новым файлом в системный temp при каждом старте. _prune_temp чистит
 # только верхний уровень temp/, подкаталог cache не трогает.
 _CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "temp", "cache")
+_TEMP_DIR = os.path.normpath(os.path.join(_CACHE_DIR, ".."))
 _AMBIENT_FILE = os.path.join(_CACHE_DIR, "ambient_drone.wav")
 _FALLBACK_FILE = os.path.join(_CACHE_DIR, "ambient_sine.wav")
 
 
 def _ensure_ambient():
+    global _AMBIENT_PATH
+    if _AMBIENT_PATH and os.path.exists(_AMBIENT_PATH):
+        return _AMBIENT_PATH
+    # Параллельный первый вызов иначе сгенерит 57МБ дрон дважды.
+    with _AMBIENT_LOCK:
+        return _ensure_ambient_locked()
+
+
+def _ensure_ambient_locked():
     global _AMBIENT_PATH
     if _AMBIENT_PATH and os.path.exists(_AMBIENT_PATH):
         return _AMBIENT_PATH
@@ -48,19 +60,27 @@ def _ensure_ambient():
         "-filter_complex", ambient_filter,
         "-ac", "2", "-ar", "48000", "-sample_fmt", "s16", _AMBIENT_FILE,
     ]
-    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
-    if result.returncode != 0:
-        logger.error(f"Ambient gen: {result.stderr[-200:]}")
+    try:
+        result = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=330)
+    except subprocess.TimeoutExpired:
+        logger.error("Ambient gen: timeout")
+        result = None
+    if result is None or result.returncode != 0:
+        if result is not None:
+            logger.error(f"Ambient gen: {result.stderr[-200:]}")
         try:
             os.remove(_AMBIENT_FILE)
         except OSError:
             pass
-        subprocess.run(
-            [_FFMPEG, "-y", "-f", "lavfi", "-i",
-             "sine=frequency=50:sample_rate=48000:d=300",
-             "-ac", "2", "-ar", "48000", _FALLBACK_FILE],
-            check=False, capture_output=True,
-        )
+        try:
+            subprocess.run(
+                [_FFMPEG, "-y", "-f", "lavfi", "-i",
+                 "sine=frequency=50:sample_rate=48000:d=300",
+                 "-ac", "2", "-ar", "48000", _FALLBACK_FILE],
+                check=False, capture_output=True, timeout=120,
+            )
+        except subprocess.TimeoutExpired:
+            logger.error("Ambient fallback gen: timeout")
         _AMBIENT_PATH = _FALLBACK_FILE
     else:
         _AMBIENT_PATH = _AMBIENT_FILE
@@ -68,7 +88,10 @@ def _ensure_ambient():
 
 
 def process_speech(tts_path: str) -> str:
-    fd, out = tempfile.mkstemp(suffix=".wav")
+    # В проектном temp, а не в системном: _prune_temp чистит только свой
+    # каталог, и при краше промежутки не утекают в %TEMP% навсегда.
+    os.makedirs(_TEMP_DIR, exist_ok=True)
+    fd, out = tempfile.mkstemp(suffix=".wav", prefix="mix_", dir=_TEMP_DIR)
     os.close(fd)
 
     ambient = _ensure_ambient()
@@ -83,8 +106,21 @@ def process_speech(tts_path: str) -> str:
         "-map", "[out]", "-ac", "2", "-ar", "48000", out,
     ]
 
-    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    try:
+        result = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        logger.error("FFmpeg voice: timeout, играем сухую речь")
+        return tts_path
     if result.returncode != 0:
         logger.error(f"FFmpeg voice: {result.stderr[-200:]}")
-        shutil.copy2(tts_path, out)
+        try:
+            shutil.copy2(tts_path, out)
+        except OSError as e:
+            # Даже копия не удалась — отдаём исходник, молчание недопустимо.
+            logger.error(f"FFmpeg voice fallback: {e}")
+            try:
+                os.remove(out)
+            except OSError:
+                pass
+            return tts_path
     return out

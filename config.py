@@ -5,9 +5,23 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
 class Config:
-    COMMENT_INTERVAL: int = int(os.getenv("COMMENT_INTERVAL", "45"))
-    MONITOR_INDEX: int = int(os.getenv("MONITOR_INDEX", "1"))
+    COMMENT_INTERVAL: int = _env_int("COMMENT_INTERVAL", 45)
+    MONITOR_INDEX: int = _env_int("MONITOR_INDEX", 1)
     # LLM: только локальный Ollama — без VPN, без лимитов, без интернета.
     # OpenAI-совместимый API: http://localhost:11434/v1
     LLM_BASE_URL: str = os.getenv(
@@ -28,7 +42,7 @@ class Config:
     TWITCH_BOT_ID: str = os.getenv("TWITCH_BOT_ID", "")
     TWITCH_CHANNEL_ID: str = os.getenv("TWITCH_CHANNEL_ID", "")
     TWITCH_CHANNEL: str = os.getenv("TWITCH_CHANNEL", "")
-    CHAT_COOLDOWN: float = float(os.getenv("CHAT_COOLDOWN", "3.0"))
+    CHAT_COOLDOWN: float = _env_float("CHAT_COOLDOWN", 3.0)
 
     # Голоса edge-tts по приоритету: "голос[:сдвиг_RVC]" через запятую.
     # Конкретный голос у Microsoft периодически «замолкает» (сервис отдаёт

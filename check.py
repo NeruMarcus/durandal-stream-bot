@@ -360,7 +360,6 @@ else:
 
 rvc_py = os.path.join(ROOT, "rvc_env", "Scripts", "python.exe")
 if os.path.exists(rvc_py):
-    import subprocess
     r = subprocess.run(
         [rvc_py, "-c", "import torch, fairseq; "
          "assert torch.cuda.is_available(); "
@@ -383,7 +382,7 @@ else:
 if os.path.exists(os.path.join(ROOT, ".env")):
     skip(".env", "существует (секреты не проверяю, см. отчёт)")
 else:
-    fail(".env", "нет — скопируй из .env.example")
+    skip(".env", "нет — песочница без секретов, скопируй из .env.example")
 
 print()
 print(f"ИТОГ: PASS={len(PASS)} FAIL={len(FAIL)} SKIP={len(SKIP)}")

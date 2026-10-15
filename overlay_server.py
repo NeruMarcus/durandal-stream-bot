@@ -261,7 +261,10 @@ poll();
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"  # keep-alive: OBS поллит /state 8 раз/сек
     def do_GET(self):
-        if self.path == "/state":
+        # OBS и браузеры добавляют cache-busting (?_=123): режем query,
+        # иначе /state с хвостом отдаёт 404 и оверлей молча пустеет.
+        path = self.path.split("?", 1)[0]
+        if path == "/state":
             try:
                 with open(_STATE_PATH, encoding="utf-8") as f:
                     body = f.read()
@@ -277,7 +280,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(raw)
-        elif self.path in ("/overlay", "/", "/overlay/"):
+        elif path in ("/overlay", "/", "/overlay/"):
             raw = _OVERLAY_HTML.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -286,7 +289,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(raw)
-        elif self.path == "/font":
+        elif path == "/font":
             try:
                 with open(_FONT_PATH, "rb") as f:
                     raw = f.read()

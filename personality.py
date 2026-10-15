@@ -249,6 +249,10 @@ def _pick_fallback() -> tuple[str, str]:
             return text, random.choice(EMOTION_OUT)
     text = _fallback_shuffled[_fallback_index]
     _fallback_index = (_fallback_index + 1) % len(_fallback_shuffled)
+    if _fallback_index == 0:
+        # Круг прошли — тасуем заново, иначе порядок детерминированно
+        # повторяется каждые 25 фраз и слух это ловит.
+        random.shuffle(_fallback_shuffled)
     _remember(text)
     return text, random.choice(EMOTION_OUT)
 

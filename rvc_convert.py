@@ -10,6 +10,7 @@ from logger import logger
 _SELF_DIR = Path(__file__).parent.resolve()
 
 _proc: subprocess.Popen | None = None
+_daemon_lock = threading.Lock()
 
 
 def _find_webui():
@@ -65,6 +66,14 @@ def _find_index(weights_dir, model_name):
 
 def _ensure_daemon():
     global _proc
+    # warmup и озвучка могут дёрнуть одновременно: без лока родятся два
+    # демона, а глобальный _proc перезапишется — второй утечёт с пайпами.
+    with _daemon_lock:
+        _ensure_daemon_locked()
+
+
+def _ensure_daemon_locked():
+    global _proc
     if _proc is not None:
         ret = _proc.poll()
         if ret is None:
@@ -91,7 +100,7 @@ def _ensure_daemon():
     env["weight_uvr5_root"] = str(rvc_dir / "assets" / "uvr5_weights")
 
     _proc = subprocess.Popen(
-        [rvc_python, daemon_script, model or ""],
+        [rvc_python, daemon_script, model],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -121,13 +130,31 @@ def _ensure_daemon():
 
 def _stop_daemon():
     global _proc
-    if _proc:
+    proc, _proc = _proc, None
+    if proc is None:
+        return
+    try:
         try:
-            _proc.stdin.close()
-            _proc.wait(timeout=5)
+            proc.stdin.close()
         except Exception:
-            _proc.kill()
-        _proc = None
+            pass
+        proc.wait(timeout=5)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+    finally:
+        # Иначе зомби-хендлы и висячий _log_err на закрываемом stderr.
+        for fh in (proc.stdout, proc.stderr):
+            try:
+                fh.close()
+            except Exception:
+                pass
 
 
 atexit.register(_stop_daemon)  # один раз на модуль, не на каждый рестарт
@@ -171,6 +198,8 @@ def rvc_convert(
 
         _, weights_dir = _find_weights_dir()
         model = _get_model()
+        if not model or weights_dir is None:
+            raise RuntimeError("RVC weights: .pth с эпохой (_e123) не найден в assets/weights")
 
         if output_wav is None:
             output_wav = str(_SELF_DIR / "temp" / f"rvc_{Path(input_wav).stem}.wav")
@@ -191,8 +220,15 @@ def rvc_convert(
             "protect": protect,
         }
 
-        _proc.stdin.write(json.dumps(request) + "\n")
-        _proc.stdin.flush()
+        try:
+            _proc.stdin.write(json.dumps(request) + "\n")
+            _proc.stdin.flush()
+        except (BrokenPipeError, ValueError, OSError) as e:
+            # Демон умер между _ensure и записью: убиваем остаток и тратим
+            # вторую попытку на чистый рестарт, а не падаем сразу.
+            logger.warning(f"RVC daemon pipe: {type(e).__name__}, перезапуск...")
+            _stop_daemon()
+            continue
 
         line = _readline_timeout(_proc, _READ_TIMEOUT)
         if not line:

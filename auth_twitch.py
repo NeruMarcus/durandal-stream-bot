@@ -71,6 +71,7 @@ async def main() -> None:
             "Порт 4343 уже занят — похоже, запущена вторая копия auth. "
             "Закрой старое окно и повтори."
         )
+        return
     bot = DurandalBot(lambda user, text: None)
     logger.info(f"Если браузер не открылся: {AUTH_URL}")
     opener = asyncio.create_task(_open_when_ready())
@@ -80,6 +81,10 @@ async def main() -> None:
         logger.info("Авторизация прервана")
     finally:
         opener.cancel()
+        try:
+            await opener
+        except asyncio.CancelledError:
+            pass
         try:
             await bot.close()
         except Exception:

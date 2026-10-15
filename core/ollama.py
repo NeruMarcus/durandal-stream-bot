@@ -79,3 +79,7 @@ def chat(
         code = e.response.status_code if e.response is not None else "?"
         logger.warning(f"Ollama: HTTP {code}")
         return None
+    except requests.exceptions.RequestException as e:
+        # Connect/Timeout/JSON: раньше всплывали наружу асимметрично с HTTP.
+        logger.warning(f"Ollama: {type(e).__name__}")
+        return None

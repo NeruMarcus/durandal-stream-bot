@@ -86,6 +86,8 @@ class DurandalBot(commands.AutoBot):
     async def setup_hook(self) -> None:
         token = _clean_token(Config.TWITCH_TOKEN)
         if not token:
+            # Молчаливый return = EventSub потом «загадочно не встаёт».
+            logger.warning("TWITCH_TOKEN пуст — чат слушать нечего (см. run.bat auth)")
             return
         refresh = (Config.TWITCH_REFRESH_TOKEN or "").strip()
         try:
