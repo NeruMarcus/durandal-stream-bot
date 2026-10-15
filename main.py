@@ -301,7 +301,7 @@ async def _vision_loop():
             pending = loop.run_in_executor(
                 _VISION_EXEC, generate_vision_commentary
             )
-            result = await asyncio.wait_for(pending, timeout=120)
+            result = await asyncio.wait_for(pending, timeout=150)
         except asyncio.TimeoutError:
             logger.warning("Vision timeout, фолбек")
             result = generate_fallback()
