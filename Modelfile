@@ -1,6 +1,7 @@
 # Durandal: gemma3:4b — одна модель на vision + текст (русский, не думающая).
-# num_ctx 8192: системный промпт + скриншот + история чата.
+# num_ctx 4096: vision ~900 токенов (промпт + 256 кадр), чат ~2-3к при окне 12.
+# 8192 держал лишний ~0.5-1 ГБ KV-кэша в VRAM на забитой 3060 — без выигрыша.
 # Создание: ollama create durandal-gemma -f Modelfile
 FROM gemma3:4b
-PARAMETER num_ctx 8192
+PARAMETER num_ctx 4096
 PARAMETER temperature 0.8

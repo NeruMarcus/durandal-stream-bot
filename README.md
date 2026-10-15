@@ -67,6 +67,9 @@ venv\Scripts\pip install -r requirements.txt
 ```powershell
 ollama pull gemma3:4b
 ollama create durandal-gemma -f Modelfile
+# Одна RTX делит игру, OBS, RVC и Ollama: KV-кэш в q8 жмёт аппетит модели
+# без потери качества (выполнить раз, затем перезапустить Ollama).
+setx OLLAMA_KV_CACHE_TYPE q8_0
 ```
 
 ### 3. Конфигурация
