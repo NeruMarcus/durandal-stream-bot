@@ -602,7 +602,6 @@ def generate_vision_commentary() -> tuple[str, str] | None:
         text, emotion = parse_emotion(str(result))
         _remember(text)
         return text, emotion
-        return generate_fallback()
     except Exception as e:
         logger.error(f"Vision: {e}")
         return generate_fallback()

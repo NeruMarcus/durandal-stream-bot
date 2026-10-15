@@ -107,15 +107,25 @@ try:
     from config import Config
     assert isinstance(Config.COMMENT_INTERVAL, int)
     assert Config.LLM_BASE_URL.startswith("http") and Config.LLM_MODEL
+    assert (Config.RVC_DEVICE or "cpu").strip().lower() in ("cpu", "cuda", "cuda:0"), Config.RVC_DEVICE
+    assert Config.RVC_F0METHOD == "rmvpe" and Config.RVC_INDEX_RATE == 0
+    assert Config.RVC_PROTECT == 0.33 and Config.RVC_RESAMPLE_SR == 24000
+    assert Config.RVC_RMS_MIX_RATE == 0.33
     os.makedirs(Config.TEMP_DIR, exist_ok=True)
     ok("config: импорт + TEMP_DIR создаётся")
+    ok("config: RVC-режим и параметры цепочки")
 except Exception as e:
     fail("config", str(e))
 
 try:
-    from logger import logger
-    logger.info("check: logger ok")
-    ok("logger: пишет в stdout + bot.log")
+    # Песочница обязана не пачкать продовый bot.log (раньше сюда писался
+    # "check: logger ok", и строки check перемешивались с сессиями бота):
+    # проверяем наличие файлового хендлера, но ничего не эмитим.
+    import logging.handlers
+    from logger import logger  # noqa: F401 — сам импорт уже проверка
+    assert any(isinstance(h, logging.handlers.RotatingFileHandler)
+               for h in logging.getLogger().handlers), "нет хендлера bot.log"
+    ok("logger: файловый хендлер на месте (песочница в bot.log не пишет)")
 except Exception as e:
     fail("logger", str(e))
 
@@ -174,6 +184,47 @@ try:
     ok(f"personality: generate_fallback x25, уникальных {len(seen)}, эмоции только en")
 except Exception as e:
     fail("personality", f"{type(e).__name__}: {e}")
+
+print("== 4b. personality: фильтры фраз (чистая логика) ==")
+try:
+    import personality as P2
+
+    assert P2._strip_detail_line("KAD: ГЕЙМПЛЕЙ — бежит\nРаннер идёт в болото") == "Раннер идёт в болото"
+    assert P2._strip_detail_line("KAD: одно") == "KAD: одно"
+    ok("filters: служебная строка сцены срезается, чистая фраза цела")
+
+    s = P2._strip_leading_screen_text('"Бийша ботов убициа" — раннеры идут в болото')
+    assert s == "Раннеры идут в болото", s
+    q = P2._strip_leading_screen_text('"[mocking] Ты опять мимо"')
+    assert q == "[mocking] Ты опять мимо", q
+    ok("filters: обрывок надписи срезан, кавычки формата раскрыты")
+
+    assert P2._decrutch("жалкая попытка провалилась") == "Попытка провалилась"
+    d2 = P2._decrutch("твои потуги жалки")
+    assert "жалк" not in d2.lower() and not P2._CRUTCH_RE.search(d2), d2
+    ok("filters: костыль-прилагательное срезано, сказуемое заменено без остатка")
+
+    t = "Опять эти стереотипы?"
+    assert P2._OPEN_RE.search(t)
+    trimmed = P2._capitalize_first(P2._OPEN_DROP_RE.sub("", t).strip())
+    assert trimmed == "Эти стереотипы?", trimmed
+    assert P2._capitalize_first("[mocking] опять ты") == "[mocking] Опять ты"
+    ok("filters: запрещённый зачин срезается, заглавная возвращается (тег цел)")
+
+    assert P2._NUMBER_RE.search("здоровье сто процентов")
+    assert not P2._NUMBER_RE.search("остался 1 магазин")
+    assert P2._FAIL_RE.search("мой милый друг")
+    ok("filters: цифры HUD и чужие интонации ловятся, одиночные цифры целы")
+
+    marker = "аудит зетта квикс маркер болото"
+    P2._remember(marker)
+    assert P2._dedup(marker) is False
+    assert P2._dedup("неон квиксильва зонтик параллакс") is True
+    P2._remember("[mocking] тестовая пометка")
+    assert "[" not in P2._recent_texts(1)[0]
+    ok("filters: дедуп ловит повтор, remember хранит без тега")
+except Exception as e:
+    fail("filters", f"{type(e).__name__}: {e}")
 
 print("== 5. core.memory / brain parsing ==")
 try:
@@ -362,12 +413,16 @@ rvc_py = os.path.join(ROOT, "rvc_env", "Scripts", "python.exe")
 if os.path.exists(rvc_py):
     r = subprocess.run(
         [rvc_py, "-c", "import torch, fairseq; "
-         "assert torch.cuda.is_available(); "
-         "print(torch.__version__)"],
+         "print(torch.__version__, 'cuda=' + str(torch.cuda.is_available()))"],
         capture_output=True, text=True, timeout=120,
     )
     if r.returncode == 0:
-        ok(f"rvc_env: torch+fairseq+CUDA ({r.stdout.strip()})")
+        from config import Config as _RCfg
+        out = (r.stdout or "").strip()
+        if (_RCfg.RVC_DEVICE or "cpu").strip().lower() != "cpu" and "cuda=True" not in out:
+            fail("rvc_env", f"RVC_DEVICE={_RCfg.RVC_DEVICE} требует CUDA, а torch её не видит ({out})")
+        else:
+            ok(f"rvc_env: torch+fairseq ({out})")
     else:
         fail("rvc_env", f"сломан: {(r.stderr or '')[-200:]}")
 else:

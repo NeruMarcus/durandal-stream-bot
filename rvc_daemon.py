@@ -32,9 +32,13 @@ from infer.modules.vc.modules import VC
 
 
 def main():
+    # Устройство — из окружения (rvc_convert кладёт RVC_DEVICE).
+    # CPU: rmvpe/hubert/net_g едут в fp32 — half на CPU не поддерживается.
+    _device = os.environ.get("RVC_DEVICE", "cpu").strip().lower()
+    _on_cpu = _device == "cpu"
     config = Config()
-    config.device = "cuda:0"
-    config.is_half = True
+    config.device = "cpu" if _on_cpu else "cuda:0"
+    config.is_half = not _on_cpu
     vc = VC(config)
 
     if _model_name:

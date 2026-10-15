@@ -17,15 +17,17 @@ _RETRIES_PER_VOICE = 2
 _FFMPEG = None
 
 # Кэш готовых фраз: фолбеки и частые реплики повторяются дословно —
-# повторный edge-tts (сеть) + RVC (GPU) заменяем копией файла (~0.2с).
-# Ключ: md5 текста + f0 + флаг RVC (параметры цепочки фиксированы).
+# повторный edge-tts (сеть) + RVC заменяем копией файла (~0.2с).
+# Ключ: md5 текста + f0 + флаг RVC + устройство RVC (cpu/cuda дают разный
+# тембр из одной фразы, кэш-файлы обязаны различаться).
 _CACHE_DIR = _SELF_DIR / "temp" / "cache"
 _CACHE_MAX = 50
 
 
 def _cache_path(tag: str, f0: int) -> str:
     mode = "r" if Config.USE_RVC else "p"
-    return str(_CACHE_DIR / f"tts_{tag}_{f0}{mode}.wav")
+    device = "cpu" if (Config.RVC_DEVICE or "cpu").strip().lower() == "cpu" else "cuda"
+    return str(_CACHE_DIR / f"tts_{tag}_{f0}{mode}{device}.wav")
 
 
 def _cache_hit(tag: str, f0: int) -> str | None:
@@ -136,30 +138,51 @@ def _apply_eq(in_path: str) -> str:
     return out
 
 
-def _post_process(raw: str, f0up_key: int = _DEFAULT_F0) -> str:
-    """ ffmpeg + RVC — всё синхронное, поэтому живёт в отдельном потоке. """
+def _post_process(raw: str, f0up_key: int = _DEFAULT_F0) -> tuple[str, bool]:
+    """ ffmpeg + RVC — всё синхронное, поэтому живёт в отдельном потоке.
+
+    Возвращает (путь, через_RVC): флаг нужен вызывающему, чтобы голос
+    без конверсии (отказ демона) не оседал в кэше под RVC-ключом —
+    иначе повторы фразы играли бы plain и после оживления демона.
+    """
     src24 = _to_24k(raw)
     rvc_out = None
+    result = None
+    converted = False
     try:
         if Config.USE_RVC:
             import rvc_convert
             try:
                 rvc_out = rvc_convert.rvc_convert(
-                    src24, f0up_key=f0up_key, index_rate=0,
-                    resample_sr=24000, rms_mix_rate=0.33, protect=0.33,
+                    src24, f0up_key=f0up_key, index_rate=Config.RVC_INDEX_RATE,
+                    resample_sr=Config.RVC_RESAMPLE_SR,
+                    rms_mix_rate=Config.RVC_RMS_MIX_RATE, protect=Config.RVC_PROTECT,
                 )
+                converted = True
             except Exception as e:
                 # Лучше голос без тембра Дюрандаля, чем молчание в эфире.
                 logger.warning(f"RVC недоступен ({e}), голос без конверсии")
-                return _apply_eq(src24)
-            return _apply_eq(rvc_out)
-        return _apply_eq(src24)
+                result = _apply_eq(src24)
+            else:
+                result = _apply_eq(rvc_out)
+        else:
+            result = _apply_eq(src24)
+        # _to_24k/_apply_eq при сбое ffmpeg возвращают вход unchanged:
+        # такой путь лежит в списке на удаление ниже, и без этой проверки
+        # вызывающий получил бы ссылку на уже удалённый файл.
+        if not result or not os.path.exists(result):
+            logger.error(f"пост-обработка не дала файл ({raw}), отдаю как есть")
+            converted = False
+            result = src24 if os.path.exists(src24) else raw
+        return result, converted
     finally:
         # Промежутки (сырой edge-tts, g24_, rvc_) — сразу в утиль, иначе за
         # долгий стрим копятся сотнями мегабайт до часового _prune_temp.
         # Итоговый eq_ возвращает вызывающий, его чистит main._speak.
+        # result из этого списка исключён: при отказе ffmpeg он совпадает
+        # с входом, и удаление убило бы отдаваемый файл.
         for p in (raw, src24, rvc_out):
-            if p:
+            if p and p != result:
                 try:
                     os.remove(p)
                 except OSError:
@@ -185,7 +208,6 @@ async def text_to_speech(text: str) -> str:
             return hit
 
     last_err: Exception | None = None
-    voice, f0 = _VOICES[0][0], _VOICES[0][1]
     for voice, f0 in _VOICES:
         for attempt in range(1, _RETRIES_PER_VOICE + 1):
             try:
@@ -215,6 +237,9 @@ async def text_to_speech(text: str) -> str:
         raise last_err
 
     # В отдельном потоке: RVC занимает секунды и не должен вешать цикл событий.
-    final = await asyncio.to_thread(_post_process, raw, f0)
-    _cache_store(tag, f0, final)
+    final, converted = await asyncio.to_thread(_post_process, raw, f0)
+    # Кэшируем только честный результат: голос без конверсии (отказ RVC)
+    # под RVC-ключом заставил бы повторы играть plain и после починки демона.
+    if converted or not Config.USE_RVC:
+        _cache_store(tag, f0, final)
     return final

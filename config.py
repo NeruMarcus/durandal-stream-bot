@@ -34,6 +34,18 @@ class Config:
     # В коде дефолт true (боевой голос Durandal). В .env.example — false,
     # чтобы новый пользователь стартовал на чистом edge-tts без rvc_env.
     USE_RVC: bool = os.getenv("USE_RVC", "true").lower() == "true"
+    # Устройство RVC-демона: "cpu" или "cuda:0". CPU — дефолт с 2026-10-16:
+    # под нагрузкой игры VRAM забит (10.6/12.2 ГБ), CUDA-демон встаёт на
+    # загрузке rmvpe и каждая реплика идёт без конверсии; на CPU та же
+    # модель (fp32) даёт тот же тембр за ~11-20с и разгружает видеокарту.
+    RVC_DEVICE: str = os.getenv("RVC_DEVICE", "cpu").strip().lower()
+    # Параметры цепочки RVC — в одном месте (tts.py и warmup в main.py
+    # обязаны ехать одинаково, иначе греется другой путь, чем боевой).
+    RVC_F0METHOD: str = "rmvpe"
+    RVC_INDEX_RATE: float = 0.0
+    RVC_PROTECT: float = 0.33
+    RVC_RESAMPLE_SR: int = 24000
+    RVC_RMS_MIX_RATE: float = 0.33
 
     TWITCH_TOKEN: str = os.getenv("TWITCH_TOKEN", "")
     TWITCH_REFRESH_TOKEN: str = os.getenv("TWITCH_REFRESH_TOKEN", "")

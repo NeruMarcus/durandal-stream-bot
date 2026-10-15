@@ -3,14 +3,19 @@ import json
 import os
 import subprocess
 import threading
+import time
 from pathlib import Path
 
+from config import Config
 from logger import logger
 
 _SELF_DIR = Path(__file__).parent.resolve()
 
 _proc: subprocess.Popen | None = None
-_daemon_lock = threading.Lock()
+# RLock на весь запрос (ensure + write + read): warmup и озвучка делят
+# одни пайпы демона, два параллельных write/read склеивают строки
+# и съедают чужие ответы. Реентрантность — для _ensure внутри запроса.
+_daemon_lock = threading.RLock()
 
 
 def _find_webui():
@@ -64,22 +69,16 @@ def _find_index(weights_dir, model_name):
     return ""
 
 
-def _ensure_daemon():
-    global _proc
-    # warmup и озвучка могут дёрнуть одновременно: без лока родятся два
-    # демона, а глобальный _proc перезапишется — второй утечёт с пайпами.
-    with _daemon_lock:
-        _ensure_daemon_locked()
-
-
 def _ensure_daemon_locked():
+    # Вызывать только под _daemon_lock (в rvc_convert им обёрнут весь запрос:
+    # warmup и озвучка делят одни пайпы демона).
     global _proc
     if _proc is not None:
         ret = _proc.poll()
         if ret is None:
             return
         logger.warning(f"RVC daemon мёртв (код {ret}), перезапуск...")
-        _stop_daemon()
+        _stop_daemon_locked()
 
     rvc_python = _find_rvc_env()
     rvc_dir, weights_dir = _find_weights_dir()
@@ -98,6 +97,13 @@ def _ensure_daemon_locked():
     env["index_root"] = str(weights_dir)
     env["rmvpe_root"] = str(rvc_dir / "assets" / "rmvpe")
     env["weight_uvr5_root"] = str(rvc_dir / "assets" / "uvr5_weights")
+    device = (Config.RVC_DEVICE or "cpu").strip().lower()
+    if device == "cuda":
+        device = "cuda:0"
+    if device not in ("cpu", "cuda:0"):
+        logger.warning(f"RVC_DEVICE={Config.RVC_DEVICE!r} непонятен, еду на cpu")
+        device = "cpu"
+    env["RVC_DEVICE"] = device
 
     _proc = subprocess.Popen(
         [rvc_python, daemon_script, model],
@@ -126,9 +132,11 @@ def _ensure_daemon_locked():
                 logger.info(f"RVC daemon: {line}")
 
     threading.Thread(target=_log_err, args=(_proc,), daemon=True).start()
+    logger.info(f"RVC демон: pid={_proc.pid} device={env['RVC_DEVICE']} модель={model}")
 
 
-def _stop_daemon():
+def _stop_daemon_locked():
+    # Вызывать только под _daemon_lock.
     global _proc
     proc, _proc = _proc, None
     if proc is None:
@@ -155,6 +163,16 @@ def _stop_daemon():
                 fh.close()
             except Exception:
                 pass
+
+
+def _stop_daemon():
+    # Best-effort снаружи запроса (atexit): если замок занят висящим
+    # запросом — не виснем на выходе, демон умрёт вместе с процессом.
+    if _daemon_lock.acquire(blocking=False):
+        try:
+            _stop_daemon_locked()
+        finally:
+            _daemon_lock.release()
 
 
 atexit.register(_stop_daemon)  # один раз на модуль, не на каждый рестарт
@@ -186,62 +204,84 @@ def rvc_convert(
     input_wav: str,
     output_wav: str | None = None,
     f0up_key: int = 0,
-    f0method: str = "rmvpe",
-    index_rate: float = 0.66,
-    protect: float = 0.5,
+    f0method: str = Config.RVC_F0METHOD,
+    index_rate: float = Config.RVC_INDEX_RATE,
+    protect: float = Config.RVC_PROTECT,
     filter_radius: int = 3,
-    resample_sr: int = 24000,
-    rms_mix_rate: float = 1.0,
+    resample_sr: int = Config.RVC_RESAMPLE_SR,
+    rms_mix_rate: float = Config.RVC_RMS_MIX_RATE,
 ) -> str:
-    for attempt in range(2):
-        _ensure_daemon()
+    # Весь запрос под RLock (см. _daemon_lock): иначе warmup и озвучка
+    # пишут/читают одни пайпы одновременно и забирают чужие ответы.
+    with _daemon_lock:
+        for attempt in range(1, 3):
+            _ensure_daemon_locked()
 
-        _, weights_dir = _find_weights_dir()
-        model = _get_model()
-        if not model or weights_dir is None:
-            raise RuntimeError("RVC weights: .pth с эпохой (_e123) не найден в assets/weights")
+            _, weights_dir = _find_weights_dir()
+            model = _get_model()
+            if not model or weights_dir is None:
+                raise RuntimeError("RVC weights: .pth с эпохой (_e123) не найден в assets/weights")
 
-        if output_wav is None:
-            output_wav = str(_SELF_DIR / "temp" / f"rvc_{Path(input_wav).stem}.wav")
-            os.makedirs(str(Path(output_wav).parent), exist_ok=True)
+            if output_wav is None:
+                output_wav = str(_SELF_DIR / "temp" / f"rvc_{Path(input_wav).stem}.wav")
+                os.makedirs(str(Path(output_wav).parent), exist_ok=True)
 
-        index_path = _find_index(weights_dir, model)
+            index_path = _find_index(weights_dir, model)
 
-        request = {
-            "input_path": input_wav,
-            "opt_path": output_wav,
-            "f0up_key": f0up_key,
-            "f0method": f0method,
-            "index_path": index_path,
-            "index_rate": index_rate,
-            "filter_radius": filter_radius,
-            "resample_sr": resample_sr,
-            "rms_mix_rate": rms_mix_rate,
-            "protect": protect,
-        }
+            request = {
+                "input_path": input_wav,
+                "opt_path": output_wav,
+                "f0up_key": f0up_key,
+                "f0method": f0method,
+                "index_path": index_path,
+                "index_rate": index_rate,
+                "filter_radius": filter_radius,
+                "resample_sr": resample_sr,
+                "rms_mix_rate": rms_mix_rate,
+                "protect": protect,
+            }
 
-        try:
-            _proc.stdin.write(json.dumps(request) + "\n")
-            _proc.stdin.flush()
-        except (BrokenPipeError, ValueError, OSError) as e:
-            # Демон умер между _ensure и записью: убиваем остаток и тратим
-            # вторую попытку на чистый рестарт, а не падаем сразу.
-            logger.warning(f"RVC daemon pipe: {type(e).__name__}, перезапуск...")
-            _stop_daemon()
-            continue
+            proc = _proc  # снапшот: чужой _stop не подменит объект между write и read
+            t0 = time.monotonic()
+            try:
+                proc.stdin.write(json.dumps(request) + "\n")
+                proc.stdin.flush()
+            except (BrokenPipeError, ValueError, OSError) as e:
+                # Демон умер между _ensure и записью: убиваем остаток и тратим
+                # вторую попытку на чистый рестарт, а не падаем сразу.
+                logger.warning(f"RVC daemon pipe: {type(e).__name__}, попытка {attempt}/2, перезапуск...")
+                _stop_daemon_locked()
+                continue
 
-        line = _readline_timeout(_proc, _READ_TIMEOUT)
-        if not line:
-            # Демон завис (CUDA под нагрузкой игры) или умер: убиваем его,
-            # иначе заблокированный GPU-контекст висит до конца стрима.
-            logger.warning("RVC daemon завис/умер, перезапуск...")
-            _stop_daemon()
-            continue
+            line = _readline_timeout(proc, _READ_TIMEOUT)
+            elapsed = time.monotonic() - t0
+            if not line:
+                # Пусто = таймаут ИЛИ демон закрыл stdout (умер). poll
+                # различает: None — висит (CUDA под нагрузкой игры).
+                logger.warning(
+                    f"RVC daemon завис/умер (попытка {attempt}/2, ждали {elapsed:.0f}с, "
+                    f"pid={proc.pid}, жив={proc.poll() is None}), перезапуск..."
+                )
+                _stop_daemon_locked()
+                continue
 
-        result = json.loads(line.strip())
-        if result["status"] == "error":
-            raise RuntimeError(f"RVC inference: {result['message']}")
+            try:
+                result = json.loads(line.strip())
+                status = result.get("status")
+            except (ValueError, AttributeError) as e:
+                # Битый ответ рассинхронизирует протокол: только рестарт.
+                logger.warning(f"RVC daemon вернул мусор ({type(e).__name__}), попытка {attempt}/2, перезапуск...")
+                _stop_daemon_locked()
+                continue
+            if status == "error":
+                raise RuntimeError(f"RVC inference: {result.get('message')}")
+            if status != "ok" or not os.path.exists(output_wav):
+                # Демон соврал "ok" без файла — отдавать нечего, только рестарт.
+                logger.warning(f"RVC daemon ok без файла ({output_wav}), попытка {attempt}/2, перезапуск...")
+                _stop_daemon_locked()
+                continue
 
-        return output_wav
+            logger.info(f"RVC конверсия ok ({elapsed:.1f}с, {os.path.basename(input_wav)})")
+            return output_wav
 
     raise RuntimeError("RVC daemon не смог обработать запрос после 2 попыток")

@@ -397,9 +397,10 @@ async def _twitch_loop():
 
 
 def _warmup_rvc():
-    """ Греем демон заранее: первая реплика не будет ждать ~40с загрузки моделей. """
+    """ Греем демон заранее: первая реплика не будет ждать загрузки моделей. """
     try:
         import struct
+        import time
 
         warm = os.path.join(_TEMP_DIR, "_warmup.wav")
         with wave.open(warm, "wb") as w:
@@ -409,12 +410,14 @@ def _warmup_rvc():
             w.writeframes(struct.pack("<" + "h" * 24000, *([0] * 24000)))
         import rvc_convert
 
+        t0 = time.monotonic()
         out = rvc_convert.rvc_convert(
-            warm, f0up_key=1, index_rate=0,
-            resample_sr=24000, rms_mix_rate=0.33, protect=0.33,
+            warm, f0up_key=1, index_rate=Config.RVC_INDEX_RATE,
+            resample_sr=Config.RVC_RESAMPLE_SR,
+            rms_mix_rate=Config.RVC_RMS_MIX_RATE, protect=Config.RVC_PROTECT,
         )
         _cleanup(out)
-        logger.info("RVC warmup ok")
+        logger.info(f"RVC warmup ok ({time.monotonic() - t0:.1f}с, {Config.RVC_DEVICE})")
     except Exception as e:
         logger.warning(f"RVC warmup: {type(e).__name__}: {e}")
     finally:
@@ -473,6 +476,15 @@ async def main():
     from overlay_server import main as overlay_main
 
     _prune_startup()
+
+    # Маркер сессии: в bot.log нет даты, а дописывают несколько запусков
+    # подряд — границу ищем по этой строке, а не по warmup.
+    import datetime
+    logger.info(
+        "=== запуск "
+        f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S} "
+        f"(RVC {'выкл' if not Config.USE_RVC else Config.RVC_DEVICE}) ==="
+    )
 
     if _overlay_port_busy():
         logger.warning(
