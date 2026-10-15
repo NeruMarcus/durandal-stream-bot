@@ -172,6 +172,24 @@ def _strip_detail_line(text: str) -> str:
     return cleaned or text.strip()
 
 
+# Тег эмоции стоит в самом начале («[mocking] …») и снимается только в конце —
+# в parse_emotion. Все фильтры ниже смотрят на начало фразы, поэтому тег
+# отделяем заранее: иначе обрывок надписи за тегом не ловится (реплика в эфире
+# начиналась с «Оружие2” - какое поэтичное название…»), и заглавная буква после
+# среза не возвращается.
+_TAG_PREFIX_RE = re.compile(r"^\s*\[([^\[\]]{1,30})\][\s:,-]*")
+
+
+def _capitalize_first(text: str) -> str:
+    """Заглавная буква для первого слова, тег эмоции не считаем за начало."""
+    m = _TAG_PREFIX_RE.match(text)
+    head = m.group(0) if m else ""
+    body = text[len(head):]
+    if body[:1].islower():
+        body = body[:1].upper() + body[1:]
+    return head + body
+
+
 # Маленькая модель иногда читает крупную стилизованную надпись по буквам и
 # выдаёт бессмыслицу («Бийша ботов убициа»), а стадия 2 ставит этот обрывок в
 # начало фразы. Промпт помогает через раз — срезаем цитату из начала, если
@@ -194,7 +212,7 @@ def _strip_leading_screen_text(text: str) -> str:
     q = _FULLY_QUOTED_RE.match(text)
     if q:
         inner = _strip_detail_line(next(g for g in q.groups() if g).strip())
-        return inner[:1].upper() + inner[1:] if inner else ""
+        return _capitalize_first(inner) if inner else ""
 
     m = _LEAD_SCREEN_RE.match(text)
     if not m:
@@ -202,13 +220,13 @@ def _strip_leading_screen_text(text: str) -> str:
     frag = m.group(0)
     rest = text[m.end():].lstrip(" \t—–-\"'«»“”„.,!?;:")
     if len(rest.split()) >= 3:
-        return rest[:1].upper() + rest[1:]
+        return _capitalize_first(rest)
     # Продолжения нет. Длинная цитата — это полноценная реплика в кавычках,
     # её раскрываем; короткий обрывок — почти наверняка надпись с экрана, и
     # озвучивать её нельзя.
     if len(frag.split()) >= 4:
         inner = text.strip().strip("«»\"“”„'").strip(" \t—–-.,!?;:")
-        return inner[:1].upper() + inner[1:] if inner else ""
+        return _capitalize_first(inner) if inner else ""
     return ""
 
 # ── Chat interaction prompt ────────────────────────────────────────────────
@@ -261,11 +279,10 @@ _CRUTCH_RE = re.compile(
 )
 
 
-# Замена костыля лучше отброса: фраза бывает верной и привязанной к сцене, а
-# модель упорно липнет к «жалкая/жалкий» и повторяет его даже в переспросе —
-# в итоге на воздух уходит заготовка вместо комментария по кадру. Меняем саму
-# основу, сохраняя окончание и заглавную букву; если костыль всё же остался —
-# вот тогда переспрос.
+# Для прилагательных при существительном работает срез (см. _CRUTCH_ADJ_RE);
+# эти основы меняем там, где опоры нет: сказуемое («твои потуги жалки»),
+# наречие, или если срез не сработал. Окончание и заглавную букву сохраняем,
+# а если костыль всё же остался — вот тогда переспрос.
 _CRUTCH_STEM_SWAP = (
     (re.compile(r"\bжалк(\w*)", re.IGNORECASE), "убог"),
     (re.compile(r"\bсмертн(\w*)", re.IGNORECASE), "бренн"),
@@ -314,15 +331,20 @@ def _decrutch(text: str) -> str:
         text,
     )
     # Слово могли срезать в самом начале — вернём заглавную букву.
-    if text[:1].islower():
-        text = text[:1].upper() + text[1:]
-    return text
+    return _capitalize_first(text)
 
 
-# Зачины модель тоже соблюдает через раз — ловим постом: тег эмоции,
-# затем запретное первое слово.
+# Зачины модель тоже соблюдает через раз — ловим постом по первому слову
+# (тег эмоции к этому моменту уже отделён и здесь необязателен).
 _OPEN_RE = re.compile(
-    r"^\s*\[[^\]]*\]\s*(опять|похоже|что\s+ж|словно|удивительно)\b",
+    r"^\s*(?:\[[^\]]*\]\s*)?(опять|похоже|что\s+ж|словно|удивительно)\b",
+    re.IGNORECASE,
+)
+# Зачин не выбрасывает фразу, а срезается — как и слово-костыль: «Опять эти
+# стереотипы?» и без «опять» читается, а заготовка вместо реплики по кадру —
+# потеря. Переспрос остаётся только на пустом остатке.
+_OPEN_DROP_RE = re.compile(
+    r"^\s*(?:\[[^\]]*\]\s*)?(?:опять|похоже|что\s+ж|словно|удивительно)\b[\s,:;\-—–]*",
     re.IGNORECASE,
 )
 
@@ -405,6 +427,13 @@ def _phrase_from_scene(desc: str, temperature: float = 0.65) -> str | None | obj
         logger.warning("Vision фраза: пусто, дальше")
         return None
     text = _strip_detail_line(text)
+    # Тег эмоции отделяем сразу — фильтры смотрят на начало фразы, а сам тег
+    # вернём перед parse_emotion, чтобы интонация не потерялась.
+    tag = ""
+    tag_match = _TAG_PREFIX_RE.match(text)
+    if tag_match:
+        tag = text[: tag_match.end()].strip()
+        text = text[tag_match.end():].strip()
     # Модель копирует формат промпта («реплика A | реплика B») — в эфир нужна одна.
     if " | " in text:
         text = text.split(" | ", 1)[0].strip()
@@ -424,8 +453,9 @@ def _phrase_from_scene(desc: str, temperature: float = 0.65) -> str | None | obj
         logger.info(f"Vision: про цифры HUD, переспрос: {text[:160]}")
         return _REJECT
     if _CRUTCH_RE.search(text):
-        # Меняем слово, а не выбрасываем фразу: она может быть единственной
-        # привязкой к сцене, а модель повторяет костыль и в переспросе.
+        # Срезаем/меняем слово, а не выбрасываем фразу: она может быть
+        # единственной привязкой к сцене, а модель повторяет костыль и в
+        # переспросе — тогда на воздух уходит заготовка вместо комментария.
         fixed = _decrutch(text)
         if _CRUTCH_RE.search(fixed):
             logger.info(f"Vision: слово-костыль, переспрос: {text[:160]}")
@@ -436,11 +466,16 @@ def _phrase_from_scene(desc: str, temperature: float = 0.65) -> str | None | obj
         logger.info(f"Vision: чужая интонация, переспрос: {text[:160]}")
         return _REJECT
     if _OPEN_RE.search(text):
-        logger.info(f"Vision: запрещённый зачин, переспрос: {text[:160]}")
-        return _REJECT
+        trimmed = _OPEN_DROP_RE.sub("", text).strip()
+        if not trimmed:
+            logger.info(f"Vision: запрещённый зачин (пусто), переспрос: {text[:160]}")
+            return _REJECT
+        trimmed = _capitalize_first(trimmed)
+        logger.info(f"Vision: срезал зачин: {trimmed[:160]}")
+        text = trimmed
     if _dedup(text):
         logger.info(f"LLM vision: {Config.LLM_MODEL}")
-        return text
+        return f"{tag} {text}".strip() if tag else text
     logger.warning(f"Ollama: повтор, дальше: {text[:160]}")
     return _REJECT
 
