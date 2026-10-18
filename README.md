@@ -37,17 +37,17 @@
 ```mermaid
 flowchart LR
     A[СКРИНШОТ ИГРЫ] --> B{VISION LOOP\n45 С}
-    B -->|КАДР ИЗМЕНИЛСЯ (DHASH)| C[OLLAMA\DURANDAL-GEMMA]
-    B -->|СТАТИЧНЫЙ КАДР| B
-    C --> D[TWITCH CHAT\nEVENTSUB]
-    D --> E[BRAIN\nКОНТЕКСТ 12MSG\n 5 ЭМОЦИЙ]
+    B -->|"КАДР ИЗМЕНИЛСЯ (DHASH)"| C["OLLAMA / DURANDAL-GEMMA"]
+    B -->|"СТАТИЧНЫЙ КАДР"| B
+    C --> D["TWITCH CHAT\nEVENTSUB"]
+    D --> E["BRAIN\nКОНТЕКСТ 12MSG\n5 ЭМОЦИЙ"]
     C --> E
-    E --> F[EDGE-TSS −25%\n АВТО-ФОЛБЭК]
-    F --> G{RVC DAEMON\nCPU FP32/CACHE}
-    G -->|УСПЕХ/КЭШ| H[EQ + ЭМБИЕНТ]
-    G -->|ТАЙМАУТ 40С| H
-    H --> I[WINSOUND\nСИСТЕМНЫЙ ЗВУК]
-    E --> J[OVERLAY:9733\nJetBrainsMono + CRT]
+    E --> F["EDGE-TSS −25%\nАВТО-ФОЛБЭК"]
+    F --> G{"RVC DAEMON\nCPU FP32/CACHE"}
+    G -->|"УСПЕХ/КЭШ"| H[EQ + ЭМБИЕНТ]
+    G -->|"ТАЙМАУТ 40С"| H
+    H --> I["WINSOUND\nСИСТЕМНЫЙ ЗВУК"]
+    E --> J["OVERLAY:9733\nJetBrainsMono + CRT"]
     I --> J
 ```
 
