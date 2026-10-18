@@ -37,7 +37,7 @@
 ```mermaid
 flowchart LR
     A[СКРИНШОТ ИГРЫ] --> B{VISION LOOP\n45 С}
-    B -->|"КАДР ИЗМЕНИЛСЯ (DHASH)"| C["OLLAMA / DURANDAL-GEMMA"]
+    B -->|"КАДР ИЗМЕНИЛСЯ (DHASH)"| C["OLLAMA DURANDAL-GEMMA"]
     B -->|"СТАТИЧНЫЙ КАДР"| B
     C --> D["TWITCH CHAT\nEVENTSUB"]
     D --> E["BRAIN\nКОНТЕКСТ 12MSG\n5 ЭМОЦИЙ"]
