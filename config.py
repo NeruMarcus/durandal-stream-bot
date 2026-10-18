@@ -61,12 +61,13 @@ class Config:
     CHAT_COOLDOWN: float = _env_float("CHAT_COOLDOWN", 3.0)
 
     # Голоса edge-tts по приоритету: "голос[:сдвиг_RVC]" через запятую.
-    # Конкретный голос у Microsoft периодически «замолкает» (сервис отдаёт
-    # пустой ответ, NoAudioReceived) — бот молча переходит к следующему.
+    # Первый — основной российский голос (родное произношение); конкретный
+    # голос у Microsoft периодически «замолкает» (сервис отдаёт пустой ответ,
+    # NoAudioReceived) — бот молча переходит к следующему.
     # Мультиязычные голоса говорят по-русски, поэтому фолбэк тоже мужской.
     TTS_VOICES: str = os.getenv(
         "TTS_VOICES",
-        "en-US-AndrewMultilingualNeural,ru-RU-DmitryNeural,"
+        "ru-RU-DmitryNeural,en-US-AndrewMultilingualNeural,"
         "en-US-BrianMultilingualNeural",
     )
 
