@@ -29,6 +29,10 @@ class Config:
     ).rstrip("/")
     # Одна модель на vision + chat (см. Modelfile): ollama pull gemma3:4b
     LLM_MODEL: str = os.getenv("LLM_MODEL", "durandal-gemma")
+    # Если сервер Ollama закрыт (трей/перезагрузка) — vision молча уходит в
+    # заготовки, пока его не поднимут руками. С true бот сам поднимает
+    # `ollama serve` и ждёт до 25с.
+    OLLAMA_AUTOSTART: bool = os.getenv("OLLAMA_AUTOSTART", "true").lower() == "true"
     TEMP_DIR: str = os.path.join(os.path.dirname(__file__), "temp")
     OVERLAY_STATE: str = os.path.join(TEMP_DIR, "overlay_state.json")
     # В коде дефолт true (боевой голос Durandal). В .env.example — false,

@@ -16,6 +16,10 @@ _proc: subprocess.Popen | None = None
 # одни пайпы демона, два параллельных write/read склеивают строки
 # и съедают чужие ответы. Реентрантность — для _ensure внутри запроса.
 _daemon_lock = threading.RLock()
+# Демон не должен получать CTRL_CLOSE_EVENT родительской консоли: фортрановский
+# рантайм (через numpy/scipy) на него жёстко падает —
+# "forrtl: error (200): program aborting due to window-CLOSE event".
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _find_webui():
@@ -114,6 +118,7 @@ def _ensure_daemon_locked():
         env=env,
         text=True,
         bufsize=1,
+        creationflags=_NO_WINDOW,
     )
 
     def _log_err(proc):

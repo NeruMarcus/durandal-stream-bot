@@ -37,7 +37,7 @@ class Brain:
         messages.extend(self.memory.get_context(12))
         messages.append({"role": "user", "content": user})
 
-        from core.ollama import chat as ollama_chat
+        from core.ollama import LLMError, chat as ollama_chat
 
         try:
             # 180, а не 300: sanitize всё равно режет до ~220 символов,
@@ -45,8 +45,8 @@ class Brain:
             text = await asyncio.to_thread(
                 ollama_chat, messages, Config.LLM_MODEL, 180, 0.85
             )
-        except Exception as e:
-            logger.warning(f"Ollama chat: {type(e).__name__}")
+        except LLMError as e:
+            logger.warning(f"Ollama chat: {e}")
             return random.choice(_CHAT_FALLBACKS), "neutral"
         if not text:
             return random.choice(_CHAT_FALLBACKS), "neutral"

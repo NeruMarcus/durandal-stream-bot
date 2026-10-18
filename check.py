@@ -32,19 +32,32 @@ if importlib.util.find_spec("dotenv") is None:
 if importlib.util.find_spec("requests") is None:
     _req = types.ModuleType("requests")
 
-    class _HTTPError(Exception):
+    class _RequestException(Exception):
+        pass
+
+    class _HTTPError(_RequestException):
         def __init__(self, *a, response=None, **k):
             super().__init__(*a)
             self.response = response
 
+    class _Timeout(_RequestException):
+        pass
+
+    class _ConnectionError(_RequestException):
+        pass
+
     _exc = types.ModuleType("requests.exceptions")
+    _exc.RequestException = _RequestException
     _exc.HTTPError = _HTTPError
+    _exc.Timeout = _Timeout
+    _exc.ConnectionError = _ConnectionError
     _req.exceptions = _exc
 
-    def _post(*a, **k):
-        raise RuntimeError("requests не установлен (песочница без сети)")
+    def _down(*a, **k):
+        raise _ConnectionError("requests не установлен (песочница без сети)")
 
-    _req.post = _post
+    _req.post = _down
+    _req.get = _down
     sys.modules["requests"] = _req
     sys.modules["requests.exceptions"] = _exc
 
@@ -111,6 +124,7 @@ try:
     assert Config.RVC_F0METHOD == "rmvpe" and Config.RVC_INDEX_RATE == 0
     assert Config.RVC_PROTECT == 0.33 and Config.RVC_RESAMPLE_SR == 24000
     assert Config.RVC_RMS_MIX_RATE == 0.33
+    assert isinstance(Config.OLLAMA_AUTOSTART, bool), Config.OLLAMA_AUTOSTART
     os.makedirs(Config.TEMP_DIR, exist_ok=True)
     ok("config: импорт + TEMP_DIR создаётся")
     ok("config: RVC-режим и параметры цепочки")
@@ -128,6 +142,35 @@ try:
     ok("logger: файловый хендлер на месте (песочница в bot.log не пишет)")
 except Exception as e:
     fail("logger", str(e))
+
+print("== 3b. core.ollama: сбой LLM больше не молчит ==")
+try:
+    import core.ollama as O
+
+    assert issubclass(O.LLMUnavailable, O.LLMError)
+    assert issubclass(O.LLMTimeout, O.LLMError)
+    assert issubclass(O.LLMHTTPError, O.LLMError)
+    ok("ollama: LLMError — общий предок (сервер/таймаут/HTTP)")
+
+    assert callable(O.health) and callable(O.ensure_server)
+    ok("ollama: health/ensure_server есть (сторож сервера)")
+
+    import requests as _rq
+    _orig_post = _rq.post
+
+    def _boom(*a, **k):
+        raise _rq.exceptions.ConnectionError("нет сервера")
+
+    _rq.post = _boom
+    try:
+        O.chat([{"role": "user", "content": "x"}], "m", 5, 0.5, timeout=1)
+        fail("ollama: закрытый сервер", "chat вернул без ошибки")
+    except O.LLMUnavailable:
+        ok("ollama: закрытый сервер -> LLMUnavailable (а не молчаливый None)")
+    finally:
+        _rq.post = _orig_post
+except Exception as e:
+    fail("ollama", f"{type(e).__name__}: {e}")
 
 print("== 4. personality + core.emotions (без сети) ==")
 try:

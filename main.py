@@ -297,28 +297,40 @@ async def _vision_loop():
             await asyncio.sleep(Config.COMMENT_INTERVAL)
             continue
         _set_status("ANALYZING // FRAME")
-        try:
-            pending = loop.run_in_executor(
-                _VISION_EXEC, generate_vision_commentary
+        # Сторож LLM: закрытая Ollama иначе даёт 90с ожидания и «Vision сцена:
+        # пусто» в логе, а реплика всё равно уходит заготовкой. Проверяем (и,
+        # если разрешено, поднимаем сервер) до вызова зрения.
+        from core.ollama import ensure_server
+        if not await asyncio.to_thread(ensure_server):
+            logger.error(
+                "Vision: Ollama недоступна — комментарий заготовкой "
+                "(включи OLLAMA_AUTOSTART или подними `ollama serve`)"
             )
-            result = await asyncio.wait_for(pending, timeout=150)
-        except asyncio.TimeoutError:
-            logger.warning("Vision timeout, фолбек")
             result = generate_fallback()
-            # wait_for поток не убивает: зависший воркер иначе держал бы
-            # единственный слот вечно и все следующие циклы пропускались бы.
-            # Старый executor глушим, дальше работает свежий; зависший поток
-            # умирает сам, когда его HTTP-таймаут (90с) догорит.
-            if pending is not None and not pending.done():
-                try:
-                    _VISION_EXEC.shutdown(wait=False, cancel_futures=True)
-                except Exception:
-                    pass
-                _VISION_EXEC = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vision")
-                pending = None
-        except Exception as e:
-            logger.error(f"Vision: {type(e).__name__}: {e}")
-            result = generate_fallback()
+            pending = None
+        else:
+            try:
+                pending = loop.run_in_executor(
+                    _VISION_EXEC, generate_vision_commentary
+                )
+                result = await asyncio.wait_for(pending, timeout=150)
+            except asyncio.TimeoutError:
+                logger.warning("Vision timeout, фолбек")
+                result = generate_fallback()
+                # wait_for поток не убивает: зависший воркер иначе держал бы
+                # единственный слот вечно и все следующие циклы пропускались бы.
+                # Старый executor глушим, дальше работает свежий; зависший поток
+                # умирает сам, когда его HTTP-таймаут (90с) догорит.
+                if pending is not None and not pending.done():
+                    try:
+                        _VISION_EXEC.shutdown(wait=False, cancel_futures=True)
+                    except Exception:
+                        pass
+                    _VISION_EXEC = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vision")
+                    pending = None
+            except Exception as e:
+                logger.error(f"Vision: {type(e).__name__}: {e}")
+                result = generate_fallback()
 
         # Тело цикла в try: любая ошибка (оверлей, звук, статус) не должна
         # убивать задачу — иначе asyncio.gather падает и бот молча умирает.
@@ -429,8 +441,11 @@ def _warmup_rvc():
 
 def _warmup_llm():
     """ Греем локальную модель заранее: первая реплика не будет ждать загрузки. """
-    from core.ollama import chat as ollama_chat
+    from core.ollama import LLMError, chat as ollama_chat, ensure_server
 
+    if not ensure_server():
+        logger.error("LLM warmup: Ollama недоступна — комментарии пойдут заготовками")
+        return
     try:
         text = ollama_chat(
             [{"role": "user", "content": "Ответь одним словом: готов."}],
@@ -442,8 +457,8 @@ def _warmup_llm():
             logger.info(f"LLM warmup ok: {Config.LLM_MODEL}")
         else:
             logger.warning(f"LLM warmup {Config.LLM_MODEL}: пустой ответ")
-    except Exception as e:
-        logger.warning(f"LLM warmup {Config.LLM_MODEL}: {type(e).__name__}")
+    except LLMError as e:
+        logger.warning(f"LLM warmup {Config.LLM_MODEL}: {e}")
 
 
 # ── Main ────────────────────────────────────────────────────────────────────

@@ -361,7 +361,7 @@ _FAIL_RE = re.compile(
 
 def _describe_scene(b64: str) -> str | None:
     """Стадия 1: кадр → сухое фактическое описание. Дорогая (энкодер GPU)."""
-    from core.ollama import chat as ollama_chat
+    from core.ollama import LLMError, chat as ollama_chat
 
     messages = [
         {"role": "system", "content": _SCENE_SYSTEM},
@@ -383,8 +383,12 @@ def _describe_scene(b64: str) -> str | None:
             timeout=90,
             extra_options={"repeat_penalty": 1.25, "presence_penalty": 0.3},
         )
-    except Exception as e:
-        logger.warning(f"Vision сцена: {type(e).__name__} за {time.time() - started:.0f}с, дальше")
+    except LLMError as e:
+        # Отдельно от пустого ответа: «Ollama закрыта» и «не успела за 90с»
+        # раньше писались одинаковым «пусто» и не диагностировались.
+        logger.warning(
+            f"Vision сцена: LLM не ответила ({e}) за {time.time() - started:.0f}с, фолбэк"
+        )
         return None
     logger.info(f"Vision сцена: {time.time() - started:.1f}с")
     if not text or not text.strip():
@@ -398,7 +402,7 @@ def _phrase_from_scene(desc: str, temperature: float = 0.65) -> str | None | obj
 
     None — звать нечего (таймаут/пусто); _REJECT — фразу надо переспросить.
     """
-    from core.ollama import chat as ollama_chat
+    from core.ollama import LLMError, chat as ollama_chat
 
     user_text = f"Описание кадра: {desc}\nДай строку [emotion] фраза."
     recent = _recent_texts(2)
@@ -419,8 +423,10 @@ def _phrase_from_scene(desc: str, temperature: float = 0.65) -> str | None | obj
             timeout=30,
             extra_options={"repeat_penalty": 1.25, "presence_penalty": 0.3},
         )
-    except Exception as e:
-        logger.warning(f"Vision фраза: {type(e).__name__} за {time.time() - started:.0f}с, дальше")
+    except LLMError as e:
+        logger.warning(
+            f"Vision фраза: LLM не ответила ({e}) за {time.time() - started:.0f}с, фолбэк"
+        )
         return None
     logger.info(f"Vision фраза: {time.time() - started:.1f}с")
     if not text:
