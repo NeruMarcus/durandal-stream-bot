@@ -30,6 +30,12 @@ def _cache_path(tag: str, f0: int) -> str:
     return str(_CACHE_DIR / f"tts_{tag}_{f0}{mode}{device}.wav")
 
 
+def _cache_tag(text: str, voice: str) -> str:
+    """Ключ кэша: текст + голос. Без голоса смена TTS_VOICES тихо доигрывала бы
+    из кэша старое произношение (RVC выравнивает тембр, но не артикуляцию)."""
+    return hashlib.md5(f"{text}|{voice}".encode()).hexdigest()[:8]
+
+
 def _cache_hit(tag: str, f0: int) -> str | None:
     try:
         src = _cache_path(tag, f0)
@@ -192,9 +198,9 @@ def _post_process(raw: str, f0up_key: int = _DEFAULT_F0) -> tuple[str, bool]:
 async def text_to_speech(text: str) -> str:
     text = parse_emotion(text or "")[0] or _DEFAULT_TEXT
 
-    tag = hashlib.md5(text.encode()).hexdigest()[:8]
+    raw_tag = hashlib.md5(text.encode()).hexdigest()[:8]
     os.makedirs(str(_SELF_DIR / "temp"), exist_ok=True)
-    raw = str(_SELF_DIR / "temp" / f"tts_{tag}.wav")
+    raw = str(_SELF_DIR / "temp" / f"tts_{raw_tag}.wav")
 
     # Каждый голос пробуем пару раз (транзиентный сбой), затем идём дальше
     # по цепочке: конкретный голос у Microsoft «замолкает» надолго, а соседний
@@ -202,7 +208,7 @@ async def text_to_speech(text: str) -> str:
     # Сначала кэш по всей цепочке: повторная фраза любым голосом
     # дешевле любого синтеза, даже если первый голос сменился.
     for voice, f0 in _VOICES:
-        hit = _cache_hit(tag, f0)
+        hit = _cache_hit(_cache_tag(text, voice), f0)
         if hit:
             logger.info(f"edge-tts: кэш {voice}, без сети/RVC")
             return hit
@@ -241,5 +247,6 @@ async def text_to_speech(text: str) -> str:
     # Кэшируем только честный результат: голос без конверсии (отказ RVC)
     # под RVC-ключом заставил бы повторы играть plain и после починки демона.
     if converted or not Config.USE_RVC:
-        _cache_store(tag, f0, final)
+        # Ключ — по голосу, которым реально синтезировали (после фолбэков).
+        _cache_store(_cache_tag(text, voice), f0, final)
     return final

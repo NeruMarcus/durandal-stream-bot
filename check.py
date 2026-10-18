@@ -358,6 +358,35 @@ try:
 except Exception as e:
     fail("rms_envelope", f"{type(e).__name__}: {e}")
 
+print("== 6b. Кэш TTS: ключ различает голос и устройство ==")
+try:
+    from voice.tts import _cache_path, _cache_tag, _parse_voices
+
+    assert _cache_tag("привет", "ru-RU-DmitryNeural") != _cache_tag(
+        "привет", "en-US-AndrewMultilingualNeural"
+    )
+    ok("cache_tag: смена голоса -> другой ключ (старое произношение не доигрывается)")
+
+    assert _cache_tag("a", "v") == _cache_tag("a", "v")
+    ok("cache_tag: детерминирован")
+
+    assert [v for v, _ in _parse_voices("one,two,three")] == ["one", "two", "three"]
+    assert _parse_voices("ru-RU-SvetlanaNeural:-11") == [("ru-RU-SvetlanaNeural", -11)]
+    ok("parse_voices: порядок сохраняется, сдвиг RVC читается")
+
+    _prev = Config.RVC_DEVICE
+    try:
+        Config.RVC_DEVICE = "cpu"
+        _cpu = _cache_path("t", 1)
+        Config.RVC_DEVICE = "cuda:0"
+        _cuda = _cache_path("t", 1)
+    finally:
+        Config.RVC_DEVICE = _prev
+    assert _cpu != _cuda
+    ok("cache_path: устройство RVC -> разный файл")
+except Exception as e:
+    fail("cache_tag", f"{type(e).__name__}: {e}")
+
 print("== 7. Опциональные зависимости (SKIP = нет в этом python) ==")
 for mod, label in [
     ("requests", "LLM cloud"),
